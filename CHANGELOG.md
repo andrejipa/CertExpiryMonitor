@@ -18,6 +18,34 @@ Todas as mudanças notáveis neste projeto. Formato baseado em
 - **Nova flag `--details`** no `Program.cs`/`TrayApplicationContext`: abre a janela direto na aba Certificados (`--configure` já existia para abrir em Configurações). Útil para shortcuts no menu Iniciar e para automação/testing.
 - **Script `scripts/CaptureUi.ps1`**: automação que inicia o app, captura PNG das duas abas via `PrintWindow` (Win32 GDI — funciona mesmo em sessão sem desktop interativo) e dumpa árvore UIA para análise de acessibilidade.
 
+### Round 5 — Inicialização automática robusta (campo: app não abria após reboot)
+
+**Bug de campo reportado:** computadores onde o app foi instalado **não abriam o app sozinhos depois de reboot**. Análise revelou cadeia frágil:
+
+- O `.iss` (Inno Setup) registrava startup **apenas** via primeira execução do app
+- Se a primeira execução não acontecesse (silent install, usuário desmarcou "Iniciar agora", crash silencioso na inicialização, timeout do `schtasks` em ambiente lento), **nada ficava registrado**
+- Reboot → app não iniciava → usuário precisava abrir manualmente sem saber disso
+
+**Fix em 3 camadas defensivas:**
+
+1. **Instalador registra startup direto** — novo `[Run]` em `installer/CertExpiryMonitor.iss` que invoca `schtasks /create /sc ONLOGON /rl LIMITED /f` **antes** mesmo da primeira execução do app. Independe de o app rodar, funciona em install silent, sobrescreve task antiga via `/f`.
+
+2. **`EnsureRegistered` idempotente** — `StartupRegistration.EnsureRegistered()` agora faz pre-check: se a task já existe E aponta para o exe atual, pula recriação. Importante após atualização de versão (caminho do exe pode mudar). Reduz overhead.
+
+3. **Diagnóstico no menu da bandeja** — novo item **"Diagnóstico de inicialização..."** abre `StartupDiagnosticsWindow` que mostra:
+   - Status visual: ✓ registrado / ⚠ não registrado
+   - Caminho do executável resolvido
+   - Comando exato no Task Scheduler (via `schtasks /query`)
+   - Comando exato no `HKCU\Run` (via Registry API)
+   - Botão **"Tentar registrar de novo"** para forçar `EnsureRegistered()` manualmente
+
+**API nova:** `StartupRegistration.QueryStatus()` retorna `StartupStatus` record (`TaskSchedulerRegistered`, `RegistryRegistered`, `ResolvedExecutablePath`, comandos completos) para inspeção/UI sem mutação.
+
+**Para corrigir instalações antigas em campo** (computadores já instalados antes deste fix):
+- Opção A: reinstalar com o novo `.exe` do instalador (o `[Run]` cria a task na hora)
+- Opção B: abrir o app manualmente 1 vez (o `EnsureRegistered` programático ainda funciona como backstop)
+- Opção C: abrir o menu da bandeja → "Diagnóstico de inicialização..." → "Tentar registrar de novo"
+
 ### Round 4 — Telemetria + Logs estruturados + EventLog + Enum semantic
 
 **Telemetria local opt-in** (`Services/TelemetryService.cs`)

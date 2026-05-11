@@ -37,6 +37,22 @@ Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--
 Name: "{group}\Desinstalar {#MyAppName}"; Filename: "{uninstallexe}"; Tasks: startmenu
 
 [Run]
+; ----------------------------------------------------------------------------
+; Registro de startup garantido no install (independente de o app rodar).
+;
+; Antes deste passo, o registro so acontecia quando o app chamava EnsureRegistered()
+; na primeira execucao. Em instalacao silent, ou se o usuario desmarcasse "Iniciar
+; agora", ou se a primeira execucao falhasse silenciosamente, o app nao iniciava
+; sozinho apos reboot.
+;
+; Agora schtasks e chamado direto pelo instalador como ONLOGON / LIMITED, sem
+; elevacao. /f sobrescreve qualquer task previa com mesmo nome. Se schtasks
+; falhar (politica corporativa rara), o app ainda tem a logica programatica
+; de fallback HKCU\Run em StartupRegistration como segunda camada.
+; ----------------------------------------------------------------------------
+Filename: "schtasks.exe"; Parameters: "/create /tn ""{#MyAppName}"" /tr ""\""{app}\{#MyAppExeName}\"" --background"" /sc ONLOGON /rl LIMITED /f"; Flags: runhidden; StatusMsg: "Registrando inicializacao automatica..."
+
+; Iniciar o app apos instalacao (interativa OU silent).
 Filename: "{app}\{#MyAppExeName}"; Parameters: "--background"; Description: "Iniciar {#MyAppName}"; Flags: nowait postinstall skipifsilent
 Filename: "{app}\{#MyAppExeName}"; Parameters: "--background"; Flags: nowait runhidden skipifnotsilent
 

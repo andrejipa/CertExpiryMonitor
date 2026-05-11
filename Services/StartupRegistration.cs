@@ -20,9 +20,23 @@ public sealed class StartupRegistration
     /// <summary>
     /// Registra inicializacao no logon. Tenta Task Scheduler primeiro;
     /// se falhar, cai no registro HKCU\Run.
+    /// <para>
+    /// E idempotente: se ja estiver registrado, sobrescreve com o caminho atual do
+    /// exe (importante apos atualizacao da versao, quando o caminho fisico muda).
+    /// </para>
     /// </summary>
     public void EnsureRegistered()
     {
+        // Pre-check: se ambos caminhos ja estao registrados E apontam para o exe atual,
+        // nao precisa fazer nada. Reduz overhead a cada startup do app.
+        var status = QueryStatus();
+        if (status.TaskSchedulerRegistered &&
+            status.TaskSchedulerCommand?.Contains(status.ResolvedExecutablePath, StringComparison.OrdinalIgnoreCase) == true)
+        {
+            _logger.Info($"Startup already registered via Task Scheduler at {status.ResolvedExecutablePath}");
+            return;
+        }
+
         if (!TryRegisterWithTaskScheduler())
         {
             RegisterWithRegistry();
@@ -33,6 +47,87 @@ public sealed class StartupRegistration
     {
         RemoveFromTaskScheduler();
         RemoveFromRegistry();
+    }
+
+    /// <summary>
+    /// Resultado de uma verificacao de status de inicializacao automatica.
+    /// </summary>
+    public sealed record StartupStatus(
+        bool TaskSchedulerRegistered,
+        string? TaskSchedulerCommand,
+        bool RegistryRegistered,
+        string? RegistryCommand,
+        string ResolvedExecutablePath)
+    {
+        public bool IsRegistered => TaskSchedulerRegistered || RegistryRegistered;
+    }
+
+    /// <summary>
+    /// Consulta o estado atual de registro de inicializacao automatica.
+    /// Nao modifica nada — apenas le. Usado pelo menu de diagnostico.
+    /// </summary>
+    public StartupStatus QueryStatus()
+    {
+        var taskCommand     = QueryTaskSchedulerCommand();
+        var registryCommand = QueryRegistryCommand();
+        return new StartupStatus(
+            TaskSchedulerRegistered: taskCommand is not null,
+            TaskSchedulerCommand:    taskCommand,
+            RegistryRegistered:      registryCommand is not null,
+            RegistryCommand:         registryCommand,
+            ResolvedExecutablePath:  ResolveExecutablePath());
+    }
+
+    private string? QueryTaskSchedulerCommand()
+    {
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo
+            {
+                FileName               = "schtasks.exe",
+                Arguments              = $"/query /tn \"{TaskName}\" /fo CSV /v",
+                WindowStyle            = ProcessWindowStyle.Hidden,
+                CreateNoWindow         = true,
+                UseShellExecute        = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError  = true
+            });
+            if (process is null) return null;
+
+            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+            var stderrTask = process.StandardError.ReadToEndAsync();
+            if (!process.WaitForExit(5_000))
+            {
+                try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
+                return null;
+            }
+
+            _ = stderrTask.GetAwaiter().GetResult();
+            var stdout = stdoutTask.GetAwaiter().GetResult();
+            if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(stdout)) return null;
+
+            // CSV com header na linha 1 e dados na linha 2; coluna "Task To Run" contem o comando.
+            // Procura por aspas que envolvem o caminho do executavel.
+            var lines = stdout.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            return lines.Length >= 2 ? lines[1] : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private string? QueryRegistryCommand()
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: false);
+            return key?.GetValue(ValueName) as string;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     // -------------------------------------------------------------------------

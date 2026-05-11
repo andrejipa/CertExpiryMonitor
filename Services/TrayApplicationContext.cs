@@ -130,6 +130,9 @@ public sealed class TrayApplicationContext : ApplicationContext
         menu.Items.Add("Abrir pasta de logs", null,
             (_, _) => SafeExecute(OpenLogsFolder, "Failed to open logs folder"));
 
+        menu.Items.Add("Diagnóstico de inicialização...", null,
+            (_, _) => SafeExecute(ShowStartupDiagnosticsWindow, "Failed to open startup diagnostics"));
+
         menu.Items.Add("Ver estatísticas de uso...", null,
             (_, _) => SafeExecute(ShowTelemetryWindow, "Failed to open telemetry window"));
 
@@ -162,6 +165,12 @@ public sealed class TrayApplicationContext : ApplicationContext
     private void ShowTelemetryWindow()
     {
         using var window = new TelemetryWindow(_telemetry);
+        window.ShowDialog();
+    }
+
+    private void ShowStartupDiagnosticsWindow()
+    {
+        using var window = new StartupDiagnosticsWindow(_startup, _logger);
         window.ShowDialog();
     }
 
