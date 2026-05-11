@@ -44,7 +44,7 @@ public sealed class JsonStateStoreConcurrencyTests : IDisposable
                 {
                     Thumbprint = $"THUMBPRINT-{threadIndex:D2}",
                     NotAfter   = DateTime.Today.AddDays(30 + threadIndex),
-                    State      = CertificateNotificationState.Notified30
+                    State      = CertificateNotificationState.NotifiedLong
                 }
             };
 
@@ -88,7 +88,7 @@ public sealed class JsonStateStoreConcurrencyTests : IDisposable
                         {
                             Thumbprint = "AA",
                             NotAfter   = DateTime.Today.AddDays(30),
-                            State      = CertificateNotificationState.Notified30
+                            State      = CertificateNotificationState.NotifiedLong
                         }
                     };
                     _store.Save(state);

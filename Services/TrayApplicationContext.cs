@@ -16,6 +16,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly CertificateCheckService _checkService;
     private readonly ToastNotifierService _notifier;
     private readonly StartupRegistration _startup;
+    private readonly TelemetryService _telemetry;
     private readonly FileLogger _logger;
     private readonly AppPaths _paths;
     private readonly SynchronizationContext _uiContext;
@@ -37,6 +38,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         CertificateCheckService checkService,
         ToastNotifierService notifier,
         StartupRegistration startup,
+        TelemetryService telemetry,
         FileLogger logger,
         AppPaths paths)
     {
@@ -49,10 +51,12 @@ public sealed class TrayApplicationContext : ApplicationContext
         _checkService      = checkService;
         _notifier          = notifier;
         _startup           = startup;
+        _telemetry         = telemetry;
         _logger            = logger;
         _paths             = paths;
         _uiContext         = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
         _settings          = NormalizeSettings(_settingsStore.Load());
+        _telemetry.Enabled = _settings.TelemetryEnabled;
 
         _notifyIcon = BuildNotifyIcon();
         UpdateTrayTooltip();
@@ -126,6 +130,9 @@ public sealed class TrayApplicationContext : ApplicationContext
         menu.Items.Add("Abrir pasta de logs", null,
             (_, _) => SafeExecute(OpenLogsFolder, "Failed to open logs folder"));
 
+        menu.Items.Add("Ver estatísticas de uso...", null,
+            (_, _) => SafeExecute(ShowTelemetryWindow, "Failed to open telemetry window"));
+
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Sair", null, (_, _) => ExitThread());
 
@@ -150,6 +157,12 @@ public sealed class TrayApplicationContext : ApplicationContext
             FileName        = _paths.RootDirectory,
             UseShellExecute = true
         });
+    }
+
+    private void ShowTelemetryWindow()
+    {
+        using var window = new TelemetryWindow(_telemetry);
+        window.ShowDialog();
     }
 
     // -------------------------------------------------------------------------
@@ -226,6 +239,14 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         _forceNextScheduledNotification = false;
 
+        // Telemetria: contagem total + skip vs executou + manual (showNoAlertFeedback=true significa botao manual)
+        _telemetry.Increment(t =>
+        {
+            t.TotalChecks++;
+            if (!ran) t.ChecksSkipped++;
+            if (showNoAlertFeedback) t.ManualChecks++;
+        });
+
         if (!ran) return;
 
         _settingsStore.Save(_settings);
@@ -233,10 +254,16 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         if (plan is not null)
         {
+            _telemetry.Increment(t => t.ChecksWithPlan++);
             var shown = ShowNotification(plan);
             if (shown)
             {
+                _telemetry.Increment(t => t.NotificationsShown++);
                 _checkService.MarkNotified(plan, _settings.Thresholds.Normalized());
+            }
+            else
+            {
+                _telemetry.Increment(t => t.NotificationFailures++);
             }
         }
         else if (showNoAlertFeedback)
@@ -404,6 +431,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         var state = _stateStore.Load();
         _expiryEvaluator.DismissCertificate(thumbprint, state);
         _stateStore.Save(state);
+        _telemetry.Increment(t => t.DismissOne++);
     }
 
     private void DismissAllCurrent()
@@ -416,6 +444,7 @@ public sealed class TrayApplicationContext : ApplicationContext
             lastPlan.DueCertificates.Select(item => item.Certificate.Thumbprint),
             state);
         _stateStore.Save(state);
+        _telemetry.Increment(t => t.DismissAll++);
     }
 
     private void DismissAll(IEnumerable<string> thumbprints)
@@ -423,6 +452,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         var state = _stateStore.Load();
         _expiryEvaluator.DismissCertificates(thumbprints, state);
         _stateStore.Save(state);
+        _telemetry.Increment(t => t.DismissAll++);
     }
 
     // -------------------------------------------------------------------------
@@ -459,7 +489,11 @@ public sealed class TrayApplicationContext : ApplicationContext
             TestNotificationNow     = TestNotificationNow,
             ReloadCertificates      = LoadCertificateDetails,
             Logger                  = _logger,
-            OpenSettingsTab         = openSettingsTab
+            OpenSettingsTab         = openSettingsTab,
+            LogFormat               = _settings.LogFormat,
+            EventLogEnabled         = _settings.EventLogEnabled,
+            TelemetryEnabled        = _settings.TelemetryEnabled,
+            SaveAdvancedSettings    = SaveAdvancedSettings
         });
 
         _detailsForm.FormClosed += (_, _) => _detailsForm = null;
@@ -496,6 +530,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         var state = _stateStore.Load();
         _expiryEvaluator.RestoreCertificate(thumbprint, state);
         _stateStore.Save(state);
+        _telemetry.Increment(t => t.Restore++);
     }
 
     private bool RemoveExpiredCertificate(string thumbprint) =>
@@ -516,6 +551,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         _settingsStore.Save(_settings);
         ScheduleNextDailyCheck(allowImmediateToday: shouldRunAgainToday);
+        _telemetry.Increment(t => t.ScheduleChanged++);
     }
 
     private void SaveNotificationSound(bool enabled)
@@ -530,6 +566,22 @@ public sealed class TrayApplicationContext : ApplicationContext
         _settings = NormalizeSettings(_settingsStore.Load());
         _settings.Thresholds = thresholds.Normalized();
         _settingsStore.Save(_settings);
+        _telemetry.Increment(t => t.ThresholdsChanged++);
+    }
+
+    private void SaveAdvancedSettings(LogFormat format, bool eventLog, bool telemetry)
+    {
+        _settings = NormalizeSettings(_settingsStore.Load());
+        _settings.LogFormat       = format;
+        _settings.EventLogEnabled = eventLog;
+        _settings.TelemetryEnabled = telemetry;
+        _settingsStore.Save(_settings);
+
+        // Aplica imediatamente nos servicos em runtime (sem precisar reiniciar o app).
+        _logger.ApplySettings(_settings);
+        _telemetry.Enabled = telemetry;
+
+        _logger.Info($"Advanced settings updated: LogFormat={format}, EventLog={eventLog}, Telemetry={telemetry}");
     }
 
     private bool TestNotificationNow()

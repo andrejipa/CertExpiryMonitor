@@ -60,8 +60,15 @@ internal static class Program
         var checkService        = new CertificateCheckService(settingsStore, stateStore, certificateReader, expiryEvaluator, logger);
         var notifier            = new ToastNotifierService(logger);
         var startup             = new StartupRegistration(logger);
+        var telemetry           = new TelemetryService(paths, logger);
 
         var currentSettings = settingsStore.Load();
+
+        // Aplica preferencias de logging (formato Text/Json + Event Log) imediatamente,
+        // antes do primeiro write. As mensagens de "starting" acima ainda vao em texto;
+        // tudo depois deste ponto respeita o que o usuario configurou.
+        logger.ApplySettings(currentSettings);
+
         if (currentSettings.StartupEnabled) startup.EnsureRegistered();
         else startup.Remove();
 
@@ -78,6 +85,7 @@ internal static class Program
             checkService,
             notifier,
             startup,
+            telemetry,
             logger,
             paths);
 

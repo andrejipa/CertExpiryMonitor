@@ -64,7 +64,7 @@ public sealed class ExpiryEvaluatorTests
     [Fact]
     public void AlreadyNotifiedSameBucketDoesNotRepeat()
     {
-        var state = StateWith("A", CertificateNotificationState.Notified30);
+        var state = StateWith("A", CertificateNotificationState.NotifiedLong);
 
         var plan = BuildPlan(Certificate("A", 30), state);
 
@@ -74,7 +74,7 @@ public sealed class ExpiryEvaluatorTests
     [Fact]
     public void ReminderPlanIncludesAlreadyNotifiedCertificate()
     {
-        var state = StateWith("A", CertificateNotificationState.Notified30);
+        var state = StateWith("A", CertificateNotificationState.NotifiedLong);
 
         var plan = _evaluator.BuildReminderPlan([Certificate("A", 30)], state, Today);
 
@@ -130,7 +130,7 @@ public sealed class ExpiryEvaluatorTests
     [Fact]
     public void ProgressingToLaterBucketNotifiesAgain()
     {
-        var state = StateWith("A", CertificateNotificationState.Notified30);
+        var state = StateWith("A", CertificateNotificationState.NotifiedLong);
 
         var plan = BuildPlan(Certificate("A", 15), state);
 

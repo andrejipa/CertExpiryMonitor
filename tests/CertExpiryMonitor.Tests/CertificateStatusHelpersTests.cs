@@ -56,7 +56,7 @@ public sealed class CertificateStatusHelpersTests
     {
         // Estados Notified* sao apenas controle de progressao; o texto e
         // computado a partir de daysRemaining, nao do estado.
-        var text = CertificateStatusHelpers.GetStatusText(10, CertificateNotificationState.Notified15, Default());
+        var text = CertificateStatusHelpers.GetStatusText(10, CertificateNotificationState.NotifiedMedium, Default());
         Assert.Equal("Próximo do vencimento", text);
     }
 
@@ -135,7 +135,7 @@ public sealed class CertificateStatusHelpersTests
         // Mesmo cert ja notificado em bucket Days15 ainda recebe categoria
         // computada por daysRemaining (que pode ter mudado, no caso de cert renovado
         // com mesmo thumbprint — cenario raro mas possivel).
-        var category = CertificateStatusHelpers.GetStatusCategory(10, CertificateNotificationState.Notified15, Default());
+        var category = CertificateStatusHelpers.GetStatusCategory(10, CertificateNotificationState.NotifiedMedium, Default());
         Assert.Equal("Warning", category);
     }
 

@@ -47,7 +47,7 @@ public sealed class JsonStateStoreTests : IDisposable
         {
             Thumbprint = "AABBCC",
             NotAfter   = new DateTime(2026, 6, 30),
-            State      = CertificateNotificationState.Notified30
+            State      = CertificateNotificationState.NotifiedLong
         };
         var state = new Dictionary<string, CertificateStateRecord>(StringComparer.OrdinalIgnoreCase)
         {
@@ -59,14 +59,14 @@ public sealed class JsonStateStoreTests : IDisposable
 
         var entry = Assert.Single(loaded);
         Assert.Equal("AABBCC",                                  entry.Key);
-        Assert.Equal(CertificateNotificationState.Notified30,   entry.Value.State);
+        Assert.Equal(CertificateNotificationState.NotifiedLong,   entry.Value.State);
         Assert.Equal(new DateTime(2026, 6, 30),                 entry.Value.NotAfter);
     }
 
     [Fact]
     public void MultipleSaveLoadCyclesPreserveAllRecords()
     {
-        var state1 = MakeState(("AA", CertificateNotificationState.Notified7),
+        var state1 = MakeState(("AA", CertificateNotificationState.NotifiedShort),
                                ("BB", CertificateNotificationState.Dismissed));
 
         _store.Save(state1);
@@ -82,7 +82,7 @@ public sealed class JsonStateStoreTests : IDisposable
 
         var final = _store.Load();
         Assert.Equal(3, final.Count);
-        Assert.Equal(CertificateNotificationState.Notified7,  final["AA"].State);
+        Assert.Equal(CertificateNotificationState.NotifiedShort,  final["AA"].State);
         Assert.Equal(CertificateNotificationState.Dismissed,  final["BB"].State);
         Assert.Equal(CertificateNotificationState.None,       final["CC"].State);
     }
@@ -111,7 +111,7 @@ public sealed class JsonStateStoreTests : IDisposable
 
         var entry = Assert.Single(state);
         Assert.Equal("AABB",                                    entry.Key);
-        Assert.Equal(CertificateNotificationState.Notified30,   entry.Value.State);
+        Assert.Equal(CertificateNotificationState.NotifiedLong,   entry.Value.State);
     }
 
     [Fact]
@@ -140,7 +140,7 @@ public sealed class JsonStateStoreTests : IDisposable
     [Fact]
     public void ThumbprintLookupIsCaseInsensitive()
     {
-        var state = MakeState(("aabbccdd", CertificateNotificationState.Notified30));
+        var state = MakeState(("aabbccdd", CertificateNotificationState.NotifiedLong));
 
         _store.Save(state);
         var loaded = _store.Load();

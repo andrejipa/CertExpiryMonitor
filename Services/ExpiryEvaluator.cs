@@ -154,10 +154,10 @@ public sealed class ExpiryEvaluator
     {
         return current switch
         {
-            CertificateNotificationState.Notified1  => true,
-            CertificateNotificationState.Notified7  => candidate is ExpiryBucket.Days7 or ExpiryBucket.Days15 or ExpiryBucket.Days30,
-            CertificateNotificationState.Notified15 => candidate is ExpiryBucket.Days15 or ExpiryBucket.Days30,
-            CertificateNotificationState.Notified30 => candidate is ExpiryBucket.Days30,
+            CertificateNotificationState.NotifiedUrgent  => true,
+            CertificateNotificationState.NotifiedShort  => candidate is ExpiryBucket.Days7 or ExpiryBucket.Days15 or ExpiryBucket.Days30,
+            CertificateNotificationState.NotifiedMedium => candidate is ExpiryBucket.Days15 or ExpiryBucket.Days30,
+            CertificateNotificationState.NotifiedLong => candidate is ExpiryBucket.Days30,
             CertificateNotificationState.Dismissed  => true,
             _                                       => false
         };
@@ -167,10 +167,10 @@ public sealed class ExpiryEvaluator
     {
         return bucket switch
         {
-            ExpiryBucket.Days30 => CertificateNotificationState.Notified30,
-            ExpiryBucket.Days15 => CertificateNotificationState.Notified15,
-            ExpiryBucket.Days7  => CertificateNotificationState.Notified7,
-            ExpiryBucket.Days1  => CertificateNotificationState.Notified1,
+            ExpiryBucket.Days30 => CertificateNotificationState.NotifiedLong,
+            ExpiryBucket.Days15 => CertificateNotificationState.NotifiedMedium,
+            ExpiryBucket.Days7  => CertificateNotificationState.NotifiedShort,
+            ExpiryBucket.Days1  => CertificateNotificationState.NotifiedUrgent,
             _                   => CertificateNotificationState.None
         };
     }

@@ -95,7 +95,7 @@ public sealed class ExpiryEvaluatorThresholdsTests
             {
                 Thumbprint = "A",
                 NotAfter   = Today.ToDateTime(TimeOnly.MinValue).AddDays(5),
-                State      = CertificateNotificationState.Notified30
+                State      = CertificateNotificationState.NotifiedLong
             }
         };
 
@@ -121,7 +121,7 @@ public sealed class ExpiryEvaluatorThresholdsTests
             {
                 Thumbprint = "A",
                 NotAfter   = Today.ToDateTime(TimeOnly.MinValue).AddDays(45),
-                State      = CertificateNotificationState.Notified30
+                State      = CertificateNotificationState.NotifiedLong
             }
         };
 

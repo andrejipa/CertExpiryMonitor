@@ -2,13 +2,13 @@
 
 <!-- Após o primeiro push para o GitHub, substitua andrejipa/CertExpiryMonitor pelo caminho real do repositório. -->
 ![Build and Test](https://github.com/andrejipa/CertExpiryMonitor/actions/workflows/build.yml/badge.svg)
-![Tests](https://img.shields.io/badge/tests-104%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-110%20passing-brightgreen)
 ![.NET](https://img.shields.io/badge/.NET-8.0-512BD4)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)
 
 Aplicativo Windows leve para monitorar certificados digitais A1 no perfil do usuário logado.
 
-> **Status:** 104 testes passando (build limpo, 0 warnings); publish single-file validado em ~75 MB.
+> **Status:** 110 testes passando (build limpo, 0 warnings); publish single-file validado em ~75 MB.
 
 ## Como publicar este repositório no GitHub
 

@@ -18,6 +18,45 @@ Todas as mudanças notáveis neste projeto. Formato baseado em
 - **Nova flag `--details`** no `Program.cs`/`TrayApplicationContext`: abre a janela direto na aba Certificados (`--configure` já existia para abrir em Configurações). Útil para shortcuts no menu Iniciar e para automação/testing.
 - **Script `scripts/CaptureUi.ps1`**: automação que inicia o app, captura PNG das duas abas via `PrintWindow` (Win32 GDI — funciona mesmo em sessão sem desktop interativo) e dumpa árvore UIA para análise de acessibilidade.
 
+### Round 4 — Telemetria + Logs estruturados + EventLog + Enum semantic
+
+**Telemetria local opt-in** (`Services/TelemetryService.cs`)
+
+- Coleta **anônima e local** (sem rede): 11 contadores agregados em `telemetry.json` (envelope v1).
+- Métricas: `TotalChecks`, `ChecksWithPlan`, `ChecksSkipped`, `ManualChecks`, `NotificationsShown`, `NotificationFailures`, `DismissOne`, `DismissAll`, `Restore`, `ThresholdsChanged`, `ScheduleChanged`.
+- **Privacidade by design**: nunca grava thumbprints, nomes, documentos ou caminhos. Apenas contadores numéricos.
+- **Opt-in via `AppSettings.TelemetryEnabled`** (default `false`). Quando desabilitado, `Increment()` é no-op (não cria arquivo nem persiste).
+- Visualização via menu de bandeja **"Ver estatísticas de uso..."** → `TelemetryWindow` (mini-form com tabela dos contadores + botão "Limpar estatísticas" + data de início da coleta).
+- **6 testes** em `TelemetryServiceTests`: no-op quando disabled, persistence, load default, reset, UpdatedAt avança, CreatedAt preservado entre updates.
+
+**Logs estruturados JSON** (`FileLogger`)
+
+- Nova propriedade `LogFormat` em `AppSettings` (`Text` default | `Json`). `FileLogger.ApplySettings(settings)` aplica em runtime sem precisar reiniciar.
+- Formato JSON Lines (JSONL — uma linha por evento): `{"ts":"...","level":"...","message":"...","exceptionType":"...","exceptionMessage":"...","stackTrace":"..."}`. Pronto para ingestão em Splunk/ELK/Sentinel/Azure Monitor.
+- Formato Text legado mantido como default (compatibilidade com qualquer parser que já leia logs antigos).
+
+**Windows EventLog opcional** (`FileLogger`)
+
+- Nova propriedade `EventLogEnabled` em `AppSettings` (default `false`). Quando ativa, eventos ERROR são espelhados para Windows Event Log (canal Application, EventID 1000).
+- Tenta criar source `CertExpiryMonitor` (precisa admin uma vez); fallback para source genérica `Application` (sempre disponível, sem elevação).
+- Falha do EventLog é silenciosa (best-effort) — nunca quebra o app.
+
+**Item 12 — `CertificateNotificationState` enum semantic**
+
+- `Notified30 → NotifiedLong`, `Notified15 → NotifiedMedium`, `Notified7 → NotifiedShort`, `Notified1 → NotifiedUrgent`. Valores numéricos do enum (30, 15, 7, 1, 999) **mantidos** para preservar compatibilidade com `certificate-state.json` existentes em produção.
+- Testes acompanhados (rename mecânico em 5 arquivos de teste).
+
+**Item 13 — Race Program.cs mutex/events** — falso positivo
+
+- Análise re-feita: `EventWaitHandle.AutoReset` SEM waiter mantém o estado signaled até alguém esperar (Win32 spec). O `HandleActivationRequests` faz `WaitOne(0)` a cada 500ms no message loop, drenando qualquer sinal pendente. **Sinal não é perdido.** Documentado em AGENTS.md como verificado.
+
+**UI da aba Configurações — GroupBox "Avançado"**
+
+- 3 CheckBoxes (LogFormat=Json, EventLogEnabled, TelemetryEnabled) com tooltips explicativos.
+- Form cresceu `ClientSize 940×500 → 940×600` para acomodar a nova GroupBox.
+- "Salvar configurações" agora salva 3 grupos atomicamente: Notificação + Faixas + Avançado.
+- `FileLogger.ApplySettings` é chamado em runtime após Save — formato JSON e EventLog refletem instantaneamente sem restart.
+
 ### UI/UX — Round 3 (refactor estrutural + busca + identidade visual)
 
 - **Cards do summary agora são clicáveis** para filtrar o grid: clicar em "⛔ Vencidos" aplica `Mostrar = Vencidos`, "⚠ Até 7 dias"/"⌛ Até 30 dias" aplica `Mostrar = A vencer`, etc. Cursor muda para hand-pointer ao hover, tooltip "Clique para filtrar a lista por esta categoria".

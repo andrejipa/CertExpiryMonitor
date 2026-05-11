@@ -41,6 +41,11 @@ exibe o toast → `JsonStateStore` / `JsonSettingsStore` persistem estado em JSO
 | `scripts/GenerateAppIcon.ps1` | Gera o `.ico` do app desenhando programaticamente (7 tamanhos 16-256px) |
 | `assets/CertExpiryMonitor.ico` | Ícone embedded — referenciado em `<ApplicationIcon>` e via `AppIcon.cs` helper |
 | `Services/AppIcon.cs` | Helper que carrega o ícone embedded uma vez com cache estático |
+| `Services/TelemetryService.cs` | Coleta de métricas anônimas locais (opt-in). 11 contadores em `telemetry.json` v1 |
+| `Services/TelemetryWindow.cs` | Janela "Ver estatísticas de uso" — tabela dos contadores + botão limpar |
+| `Models/AppSettings.LogFormat` | Enum `Text`/`Json` para formato do `monitor.log` |
+| `Models/AppSettings.EventLogEnabled` | Espelha ERROR para Windows Event Log |
+| `Models/AppSettings.TelemetryEnabled` | Liga/desliga coleta de telemetria local |
 | `tests/…/ExpiryEvaluatorTests.cs` | 13 testes de lógica de notificação (thresholds padrão) |
 | `tests/…/ExpiryEvaluatorThresholdsTests.cs` | Testes com thresholds customizados |
 | `tests/…/JsonStateStoreTests.cs` | Persistência, migração de formato legado, robustez |
@@ -107,9 +112,9 @@ dotnet test --collect:"XPlat Code Coverage" --results-directory coverage
 
 | Item | Impacto | Observação |
 |---|---|---|
-| `CertificateNotificationState` enum com valores numéricos acoplados aos dias padrão | Médio | Renomear (`Notified30 → NotifiedLong`) ao mudar thresholds padrão — sem impacto funcional atual, apenas confusão semântica. |
+| ~~`CertificateNotificationState` enum semantic~~ | Resolvido | Valores `Notified30/15/7/1` renomeados para `NotifiedLong/Medium/Short/Urgent`. Valores numéricos do enum (30, 15, 7, 1, 999) preservados para compat JSON. |
 | Testes de UI (DetailsForm, TrayApplicationContext) ausentes | Médio | UI WinForms difícil de testar sem headless runner. Mitigado parcialmente pela extração para helpers testáveis (`CertificateStatusHelpers`, `CertificateDocumentHelpers`). |
-| Race entre mutex e events em `Program.cs` | Baixo | Segunda instância pode `Set()` event antes da primeira subscrever — janela < 100ms na inicialização. AutoReset perde o sinal. Aceitável. |
+| ~~Race mutex/events em `Program.cs`~~ | Verificado | Falso positivo. `AutoReset` sem waiter mantém estado signaled até alguém esperar (Win32 spec). `HandleActivationRequests` drena via `WaitOne(0)` no timer 500ms. Sinal não é perdido. |
 | `JsonStateStore`/`JsonSettingsStore` temp-file não-fsync | Baixo | `File.Move` em primeira escrita não força flush; crash brusco do SO pode perder o arquivo. Próximo save recria. |
 | `.bak` files em `%LOCALAPPDATA%\CertExpiryMonitor` | Baixo | `File.Replace` sobrescreve a cada save — máximo 2 arquivos. Não acumulam, mas tampouco são removidos. |
 | Versão duplicada no `.csproj` e `.iss` | Baixo | Mitigado por `scripts/Publish-Release.ps1`. Risco subsiste em edição manual. |

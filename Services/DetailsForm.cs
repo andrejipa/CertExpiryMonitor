@@ -28,6 +28,12 @@ public sealed class DetailsFormOptions
     public required Func<(IReadOnlyList<CertificateSnapshot>, IReadOnlyDictionary<string, CertificateStateRecord>)> ReloadCertificates { get; init; }
     public required FileLogger Logger { get; init; }
     public bool OpenSettingsTab { get; init; }
+
+    // Configuracoes avancadas
+    public required LogFormat LogFormat { get; init; }
+    public required bool EventLogEnabled { get; init; }
+    public required bool TelemetryEnabled { get; init; }
+    public required Action<LogFormat, bool, bool> SaveAdvancedSettings { get; init; }
 }
 
 // ---------------------------------------------------------------------------
@@ -44,8 +50,8 @@ public sealed class DetailsForm : Form
     {
         Text            = "Certificados A1 monitorados";
         StartPosition   = FormStartPosition.CenterScreen;
-        ClientSize      = new Size(940, 500);  // +40 px porque summary panel cresceu (cards + busca)
-        MinimumSize     = new Size(780, 420);
+        ClientSize      = new Size(940, 600);  // +100 px do GroupBox "Avançado" na aba Configurações
+        MinimumSize     = new Size(780, 520);
         Icon            = AppIcon.Current;     // icone proprio na barra de titulo e Alt+Tab
 
         var table = CreateCertificateTable();
@@ -523,21 +529,61 @@ public sealed class DetailsForm : Form
             lblL1,  spinL1,  DaysSuffix(146)
         ]);
 
+        // ===== GroupBox "Avançado" =====
+        var groupAdvanced = new GroupBox
+        {
+            Text     = "Avançado",
+            Location = new Point(20, 408),
+            Size     = new Size(560, 105)
+        };
+
+        var chkLogJson = new CheckBox
+        {
+            Text     = "Logs em formato JSON (facilita ingestão em SIEM/Splunk)",
+            AutoSize = true,
+            Checked  = options.LogFormat == LogFormat.Json,
+            Location = new Point(12, 24),
+            AccessibleName = "Gravar logs em formato JSON estruturado"
+        };
+        tip.SetToolTip(chkLogJson, "Formato texto humano-legível (default) vs JSON Lines (uma linha por evento, fácil de parsear). Aplicado em monitor.log.");
+
+        var chkEventLog = new CheckBox
+        {
+            Text     = "Espelhar erros no Windows Event Log (Application channel)",
+            AutoSize = true,
+            Checked  = options.EventLogEnabled,
+            Location = new Point(12, 48),
+            AccessibleName = "Espelhar erros no Windows Event Log"
+        };
+        tip.SetToolTip(chkEventLog, "Quando ativo, eventos ERROR são duplicados no Event Log do Windows. Padrão para monitoramento corporativo via SCOM/Sentinel.");
+
+        var chkTelemetry = new CheckBox
+        {
+            Text     = "Coletar estatísticas anônimas locais (ajuda a melhorar o app)",
+            AutoSize = true,
+            Checked  = options.TelemetryEnabled,
+            Location = new Point(12, 72),
+            AccessibleName = "Coletar estatísticas anônimas locais"
+        };
+        tip.SetToolTip(chkTelemetry, "Salva contadores agregados em telemetry.json (sem rede, sem thumbprints, sem dados pessoais). Apenas: total de checks, notificações exibidas, dismisses. Default: desligado.");
+
+        groupAdvanced.Controls.AddRange([chkLogJson, chkEventLog, chkTelemetry]);
+
         // ===== Feedback label (status de save) =====
         var feedback = new Label
         {
             AutoSize  = true,
             ForeColor = Color.FromArgb(28, 115, 64),
-            Location  = new Point(20, 405)
+            Location  = new Point(20, 525)
         };
 
         // ===== Botão "Salvar configurações" unificado =====
         var saveAll = new Button
         {
             Text           = "Salvar configurações",
-            Location       = new Point(440, 400),
+            Location       = new Point(440, 520),
             Size           = new Size(140, 32),
-            AccessibleName = "Salvar todas as configurações (horário, som e faixas)"
+            AccessibleName = "Salvar todas as configurações (horário, som, faixas e avançado)"
         };
         tip.SetToolTip(saveAll, "Salva horário do popup, opção de som e as 4 faixas. Faixas fora de ordem são ajustadas automaticamente.");
 
@@ -564,6 +610,10 @@ public sealed class DetailsForm : Form
                 options.SaveNotificationTime(timePicker.Value.TimeOfDay);
                 options.SaveNotificationSound(sound.Checked);
                 options.SaveThresholds(proposed);
+                options.SaveAdvancedSettings(
+                    chkLogJson.Checked   ? LogFormat.Json : LogFormat.Text,
+                    chkEventLog.Checked,
+                    chkTelemetry.Checked);
                 onThresholdsSaved?.Invoke(proposed);
 
                 feedback.Text = $"Configurações salvas: {timePicker.Value:HH:mm}, som {(sound.Checked ? "ligado" : "desligado")}, faixas {proposed.Level1}/{proposed.Level7}/{proposed.Level15}/{proposed.Level30}.";
@@ -581,7 +631,7 @@ public sealed class DetailsForm : Form
             catch (Exception ex) { options.Logger.Error(ex, "Failed to test popup"); MessageBox.Show("Não foi possível testar o popup agora. Tente novamente.", "CertExpiryMonitor", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         };
 
-        tab.Controls.AddRange([groupNotification, groupThresholds, feedback, saveAll]);
+        tab.Controls.AddRange([groupNotification, groupThresholds, groupAdvanced, feedback, saveAll]);
         return tab;
     }
 
