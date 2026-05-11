@@ -90,9 +90,12 @@ Write-Host "      Publicado em: $publishDir"
 if ($BuildInstaller) {
     Write-Host "[4/4] Compilando instalador ..."
 
+    # Inno Setup 6 pode estar em 3 locais comuns: ProgramFiles (x86), ProgramFiles
+    # ou %LOCALAPPDATA%\Programs (instalacao per-user, padrao do winget recente).
     $iscc = @(
         "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
-        "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
+        "${env:ProgramFiles}\Inno Setup 6\ISCC.exe",
+        "${env:LOCALAPPDATA}\Programs\Inno Setup 6\ISCC.exe"
     ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 
     if (-not $iscc) {
