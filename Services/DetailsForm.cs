@@ -726,11 +726,15 @@ public sealed class DetailsForm : Form
             if (categoryClause is not null) clauses.Add(categoryClause);
 
             // Busca textual (case-insensitive via expressao LIKE no DataTable.RowFilter).
-            // Escapa apostrofos para evitar quebra de sintaxe.
+            // O parser do RowFilter trata varios chars como metacharacteres:
+            //   '  *  %  [  ]
+            // Sem escape completo, um usuario digitando "[" dispara
+            // SyntaxErrorException nao tratada que sobe ate Application.ThreadException.
+            // Ver CertificateSearchEscaper para detalhes.
             var query = searchBox.Text?.Trim() ?? string.Empty;
             if (query.Length > 0)
             {
-                var escaped = query.Replace("'", "''");
+                var escaped = CertificateSearchEscaper.EscapeForRowFilter(query);
                 clauses.Add($"(Holder LIKE '%{escaped}%' OR Document LIKE '%{escaped}%')");
             }
 

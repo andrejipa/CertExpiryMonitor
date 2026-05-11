@@ -132,20 +132,40 @@ public sealed class JsonStateStore
         try
         {
             File.WriteAllText(tempPath, content);
-            if (File.Exists(path))
-            {
-                File.Replace(tempPath, path, backupPath, ignoreMetadataErrors: true);
-            }
-            else
-            {
-                File.Move(tempPath, path);
-            }
+            // Retry com backoff para sharing violation (antivirus, OneDrive, indexador).
+            // Sem isso, save eventual perde dados quando cliente OneDrive locka por ms.
+            ReplaceWithRetry(tempPath, path, backupPath);
         }
         finally
         {
             if (File.Exists(tempPath))
             {
                 File.Delete(tempPath);
+            }
+        }
+    }
+
+    private static void ReplaceWithRetry(string tempPath, string path, string backupPath)
+    {
+        const int maxAttempts = 5;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    File.Replace(tempPath, path, backupPath, ignoreMetadataErrors: true);
+                }
+                else
+                {
+                    File.Move(tempPath, path);
+                }
+                return;
+            }
+            catch (IOException) when (attempt < maxAttempts)
+            {
+                // Backoff exponencial: 25ms, 50ms, 100ms, 200ms.
+                Thread.Sleep(25 * (1 << (attempt - 1)));
             }
         }
     }
