@@ -118,11 +118,21 @@ dotnet test --collect:"XPlat Code Coverage" --results-directory coverage
 | `JsonStateStore`/`JsonSettingsStore` temp-file não-fsync | Baixo | `File.Move` em primeira escrita não força flush; crash brusco do SO pode perder o arquivo. Próximo save recria. |
 | `.bak` files em `%LOCALAPPDATA%\CertExpiryMonitor` | Baixo | `File.Replace` sobrescreve a cada save — máximo 2 arquivos. Não acumulam, mas tampouco são removidos. |
 | Versão duplicada no `.csproj` e `.iss` | Baixo | Mitigado por `scripts/Publish-Release.ps1`. Risco subsiste em edição manual. |
-| Sem code signing | Médio (produção) | `.exe` e instalador sem assinatura disparam SmartScreen warning. Fora do escopo da v1.0 (requer cert). |
-| Sem suporte multi-idioma | Baixo | Strings PT-BR hardcoded. Aceitável para escopo SMB/uso pessoal brasileiro. |
 | Navegação por teclado completa em `DetailsForm` | Baixo | `AccessibleName`/`AccessibleDescription` agora setados nos controles principais; navegação Tab/Enter ainda não auditada manualmente. |
 | Dark mode | Baixo | Disponível apenas em .NET 9+ (`Application.SetColorMode`). Postergado até upgrade. |
 | Push para GitHub (`git push origin main`) | Operacional | Repo local existe e remote está configurado. Falta o usuário criar o repo em `github.com/new` (uma vez) — depois disso, push e CI rodam automaticamente. |
+
+### Decisões deliberadas — NÃO implementar
+
+Estes itens já apareceram em auditorias anteriores e foram **explicitamente rejeitados** pelo dono do projeto. Não propor de novo em futuras auditorias.
+
+| Item | Decisão | Motivo |
+|---|---|---|
+| Code signing (certificado EV) | **Não** | Uso interno de escritório; não é distribuído ao público; sem produção de instaladores assinados. |
+| MSIX / Intune | **Não** | Inno Setup atual já entrega tudo (instalação per-user sem admin, Start Menu shortcut, uninstaller limpo). MSIX adicionaria sandbox + virtualização de registry + necessidade de code-signing sem ganho real. |
+| ADMX/GPO templates | **Não** | Escritório sem Active Directory / Domain Controller; templates de policy não fazem sentido. |
+| Multi-idioma (en-US/es-ES) | **Não** | 100% PT-BR é suficiente para o cenário de uso. |
+| Testes High-DPI em 4K real | **Não** | Uso primário em 1080p; `PerMonitorV2` já está ativado no `.csproj` como medida preventiva. |
 
 ### Resolvidos nesta versão
 
