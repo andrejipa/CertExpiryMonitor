@@ -1,0 +1,65 @@
+# .NET build output
+bin/
+obj/
+publish/
+publish-test/
+TestResults/
+
+# SDK local instalado por dotnet-install.ps1 (não-versionado; usado em ambientes sem SDK global)
+.dotnet-local/
+dotnet-install.ps1
+
+# Screenshots de UI capturados por scripts/CaptureUi.ps1
+ui-shots/
+ui-shots-*/
+
+# Previews gerados por scripts/preview-icon.ps1 (o .ico final fica versionado)
+assets/preview-*.png
+
+# Inno Setup output
+installer-output/
+
+# Coverage
+coverage/
+*.coverage
+*.coveragexml
+
+# IDE
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vscode/
+
+# Rider / ReSharper
+_ReSharper*/
+*.[Rr]e[Ss]harper
+
+# Logs e arquivos temporarios locais
+*.log
+*.tmp
+*.bak
+
+# Visual Studio backups
+*.[Bb]ak
+*.swp
+*~
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Pacotes / NuGet local
+*.nupkg
+.nuget/
+
+# Output gerado pelo dotnet test/xunit
+TestResults/
+
+# Sensitive (defensivo)
+*.pfx
+*.snk
+appsettings.*.local.json

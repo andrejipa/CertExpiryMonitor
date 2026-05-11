@@ -1,0 +1,73 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    # Necessario porque o target e net8.0-windows10.0.19041.0 com UseWindowsForms.
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore (app)
+        run: dotnet restore CertExpiryMonitor.csproj
+
+      - name: Restore (tests)
+        run: dotnet restore tests\CertExpiryMonitor.Tests\CertExpiryMonitor.Tests.csproj
+
+      - name: Build (Release)
+        run: dotnet build CertExpiryMonitor.csproj --configuration Release --no-restore
+
+      - name: Test (Release, com cobertura)
+        run: dotnet test tests\CertExpiryMonitor.Tests\CertExpiryMonitor.Tests.csproj --configuration Release --no-restore --logger "trx;LogFileName=test-results.trx" --collect:"XPlat Code Coverage" --results-directory TestResults
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults/**/*
+          retention-days: 14
+
+  publish-smoke:
+    # Garante que o publish single-file ainda funciona — protege contra regressao em opcoes do .csproj.
+    runs-on: windows-latest
+    needs: build-test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Publish single-file
+        run: dotnet publish CertExpiryMonitor.csproj --configuration Release --runtime win-x64 --self-contained true /p:PublishSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true --output publish
+
+      - name: Verify executable
+        shell: pwsh
+        run: |
+          $exe = Get-Item publish\CertExpiryMonitor.exe
+          if (-not $exe) { throw "Publish nao gerou CertExpiryMonitor.exe" }
+          Write-Host "Publicado: $($exe.FullName) ($([math]::Round($exe.Length / 1MB, 2)) MB)"
+
+      - name: Upload publish artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CertExpiryMonitor-win-x64
+          path: publish\CertExpiryMonitor.exe
+          retention-days: 14
