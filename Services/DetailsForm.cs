@@ -322,6 +322,16 @@ public sealed class DetailsForm : Form
 
         contextMenu.Opening += (_, e) =>
         {
+            // Defensa contra right-click no header ou em area vazia da grid:
+            // sem linha selecionada NUNCA mostrar menu de contexto. Hoje o
+            // unico item depende de StatusCategory='Expired', mas qualquer
+            // item futuro herda essa proteção.
+            if (grid.SelectedRows.Count == 0)
+            {
+                e.Cancel = true;
+                return;
+            }
+
             var hasExpired = TryGetSelectedRowView(grid, out var rv) &&
                              rv.Row.Field<string>("StatusCategory") == "Expired";
             removeExpiredItem.Enabled = hasExpired;

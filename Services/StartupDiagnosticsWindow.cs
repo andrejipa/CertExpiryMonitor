@@ -99,6 +99,12 @@ public sealed class StartupDiagnosticsWindow : Form
         };
         registerBtn.Click += (_, _) =>
         {
+            // Disable durante operacao: EnsureRegistered chama schtasks sincrono
+            // (WaitForExit 10s). 10 cliques seguidos = 100s travado na UI thread.
+            registerBtn.Enabled  = false;
+            var originalText     = registerBtn.Text;
+            registerBtn.Text     = "Registrando...";
+            UseWaitCursor        = true;
             try
             {
                 _startup.EnsureRegistered();
@@ -117,6 +123,12 @@ public sealed class StartupDiagnosticsWindow : Form
                     "CertExpiryMonitor",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
+            }
+            finally
+            {
+                registerBtn.Text    = originalText;
+                registerBtn.Enabled = true;
+                UseWaitCursor       = false;
             }
         };
 

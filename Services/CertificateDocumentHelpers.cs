@@ -28,14 +28,20 @@ internal static class CertificateDocumentHelpers
 
     /// <summary>
     /// Separa nome e numero de documento do CN. Convenção: "NOME COMPLETO:DOCUMENTO".
+    /// Trunca em 256 chars para evitar que CNs patologicos (com Unicode RTL,
+    /// zero-width chars ou 10K caracteres) degradem o paint do DataGridView.
     /// </summary>
     internal static (string Name, string Document) ParseHolder(string commonName)
     {
+        const int MaxNameChars = 256;
         var sep = commonName.LastIndexOf(':');
-        if (sep < 0) return (commonName.Trim(), string.Empty);
+        if (sep < 0) return (Truncate(commonName.Trim(), MaxNameChars), string.Empty);
 
-        return (commonName[..sep].Trim(), commonName[(sep + 1)..].Trim());
+        return (Truncate(commonName[..sep].Trim(), MaxNameChars), commonName[(sep + 1)..].Trim());
     }
+
+    private static string Truncate(string value, int maxChars) =>
+        value.Length <= maxChars ? value : value[..maxChars] + "…";
 
     /// <summary>
     /// Formata CPF (11 digitos) ou CNPJ (14 digitos) com pontuacao padrao.

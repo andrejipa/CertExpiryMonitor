@@ -55,7 +55,16 @@ public class CertificateReader
             _logger.Error(ex, "Failed to read CurrentUser Personal store");
         }
 
-        return results;
+        // Dedup por thumbprint normalizado. Cenarios raros mas reais:
+        // - cert reinstalado (mesmo thumbprint, NotAfter diferente),
+        // - store corrompido com duplicatas,
+        // - dois containers PFX com mesmo certificado.
+        // Sem dedup, DetailsForm exibiria duas linhas para o mesmo cert e dismiss
+        // marcaria ambas inconsistentemente. Manter o mais recente (maior NotAfter).
+        return results
+            .GroupBy(c => c.Thumbprint, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.OrderByDescending(c => c.NotAfter).First())
+            .ToList();
     }
 
     public bool RemoveFromCurrentUserPersonalStore(string thumbprint)

@@ -47,6 +47,19 @@ public sealed class JsonStateStore
                 return new Dictionary<string, CertificateStateRecord>(StringComparer.OrdinalIgnoreCase);
             }
 
+            // Size guard: state legitimo cresce ~200B por cert; 1MB suporta ~5000 certs.
+            // Bem alem do realista (usuario tipico tem <20). Bloqueia DoS persistente.
+            const long MaxStateBytes = 10_485_760;  // 10 MB
+            var info = new FileInfo(_paths.StatePath);
+            if (info.Length > MaxStateBytes)
+            {
+                _logger.Error(
+                    new InvalidDataException($"certificate-state.json too large ({info.Length} bytes); ignoring"),
+                    "State file exceeded size guard");
+                PreserveCorruptFile(_paths.StatePath);
+                return new Dictionary<string, CertificateStateRecord>(StringComparer.OrdinalIgnoreCase);
+            }
+
             var json = File.ReadAllText(_paths.StatePath);
             var records = DeserializeRecords(json);
 

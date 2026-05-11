@@ -1,5 +1,5 @@
 #define MyAppName "CertExpiryMonitor"
-#define MyAppVersion "1.0.2"
+#define MyAppVersion "1.0.3"
 #define MyAppPublisher "Escritorio"
 #define MyAppExeName "CertExpiryMonitor.exe"
 

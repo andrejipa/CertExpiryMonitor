@@ -50,6 +50,20 @@ public sealed class JsonSettingsStore
                 return new AppSettings();
             }
 
+            // Size guard: settings legitimo nunca passa de poucos KB. Se algum
+            // processo do usuario gravar um JSON gigante (DoS persistente, OOM
+            // a cada startup), preservamos e voltamos aos defaults.
+            const long MaxSettingsBytes = 1_048_576;  // 1 MB
+            var info = new FileInfo(_paths.SettingsPath);
+            if (info.Length > MaxSettingsBytes)
+            {
+                _logger.Error(
+                    new InvalidDataException($"settings.json too large ({info.Length} bytes); ignoring"),
+                    "Settings file exceeded size guard");
+                PreserveCorruptFile(_paths.SettingsPath);
+                return new AppSettings();
+            }
+
             var json = File.ReadAllText(_paths.SettingsPath);
             return DeserializeSettings(json);
         }
