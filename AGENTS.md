@@ -120,7 +120,6 @@ dotnet test --collect:"XPlat Code Coverage" --results-directory coverage
 | Versão duplicada no `.csproj` e `.iss` | Baixo | Mitigado por `scripts/Publish-Release.ps1`. Risco subsiste em edição manual. |
 | Navegação por teclado completa em `DetailsForm` | Baixo | `AccessibleName`/`AccessibleDescription` agora setados nos controles principais; navegação Tab/Enter ainda não auditada manualmente. |
 | Dark mode | Baixo | Disponível apenas em .NET 9+ (`Application.SetColorMode`). Postergado até upgrade. |
-| Push para GitHub (`git push origin main`) | Operacional | Repo local existe e remote está configurado. Falta o usuário criar o repo em `github.com/new` (uma vez) — depois disso, push e CI rodam automaticamente. |
 
 ### Decisões deliberadas — NÃO implementar
 
@@ -155,3 +154,4 @@ Estes itens já apareceram em auditorias anteriores e foram **explicitamente rej
 | Sem CI / build não-validado automaticamente | `.github/workflows/build.yml` com build, test (cobertura) e publish single-file em cada PR. |
 | Sem `.gitignore` | Criado, cobre artefatos de build, IDE, SDK local e arquivos sensíveis. |
 | Bug encontrado pelos testes — case-sensitivity do envelope | `JsonDocument.TryGetProperty` é case-sensitive; substituído por `EnumerateObject` insensitive e `PropertyNameCaseInsensitive=true` no JsonOptions. |
+| Push para GitHub | `scripts/push-to-github.ps1` cria o repo via API + push, usando credencial do Windows Credential Manager (sem token hardcoded). CI rodou e passou no primeiro push. |

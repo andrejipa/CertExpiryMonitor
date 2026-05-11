@@ -1,7 +1,6 @@
 # CertExpiryMonitor
 
-<!-- Após o primeiro push para o GitHub, substitua andrejipa/CertExpiryMonitor pelo caminho real do repositório. -->
-![Build and Test](https://github.com/andrejipa/CertExpiryMonitor/actions/workflows/build.yml/badge.svg)
+[![Build and Test](https://github.com/andrejipa/CertExpiryMonitor/actions/workflows/build.yml/badge.svg)](https://github.com/andrejipa/CertExpiryMonitor/actions)
 ![Tests](https://img.shields.io/badge/tests-110%20passing-brightgreen)
 ![.NET](https://img.shields.io/badge/.NET-8.0-512BD4)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)
@@ -10,21 +9,7 @@ Aplicativo Windows leve para monitorar certificados digitais A1 no perfil do usu
 
 > **Status:** 110 testes passando (build limpo, 0 warnings); publish single-file validado em ~75 MB.
 
-## Como publicar este repositório no GitHub
-
-```powershell
-# (uma vez) Autenticar gh CLI no GitHub:
-gh auth login --web
-
-# Criar repositório público e fazer push da branch main:
-gh repo create CertExpiryMonitor --public --source=. --remote=origin --push
-
-# OU, manualmente:
-git remote add origin https://github.com/<seu-usuario>/CertExpiryMonitor.git
-git push -u origin main
-```
-
-Depois do push, o workflow `.github/workflows/build.yml` roda automaticamente e o badge acima fica verde. Se o seu usuário não for `andre-jipa`, atualize a URL do badge no início deste README.
+**Repositório:** https://github.com/andrejipa/CertExpiryMonitor
 
 ## Arquitetura
 
