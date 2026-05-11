@@ -18,6 +18,30 @@ Todas as mudanças notáveis neste projeto. Formato baseado em
 - **Nova flag `--details`** no `Program.cs`/`TrayApplicationContext`: abre a janela direto na aba Certificados (`--configure` já existia para abrir em Configurações). Útil para shortcuts no menu Iniciar e para automação/testing.
 - **Script `scripts/CaptureUi.ps1`**: automação que inicia o app, captura PNG das duas abas via `PrintWindow` (Win32 GDI — funciona mesmo em sessão sem desktop interativo) e dumpa árvore UIA para análise de acessibilidade.
 
+### UI/UX — Round 3 (refactor estrutural + busca + identidade visual)
+
+- **Cards do summary agora são clicáveis** para filtrar o grid: clicar em "⛔ Vencidos" aplica `Mostrar = Vencidos`, "⚠ Até 7 dias"/"⌛ Até 30 dias" aplica `Mostrar = A vencer`, etc. Cursor muda para hand-pointer ao hover, tooltip "Clique para filtrar a lista por esta categoria".
+- **Busca textual no grid** (`TextBox` com `PlaceholderText`): filtra por `Holder` ou `Document` via `LIKE` no `DataTable.RowFilter`, case-insensitive, escapando apóstrofos para evitar SQL injection. Combina via `AND` com o filtro de categoria.
+- **Coluna "Situação" some dinamicamente** quando um filtro de categoria específico está aplicado (era redundante — todas as linhas teriam o mesmo valor).
+- **Refactor estrutural da aba Configurações**:
+  - `GroupBox "Notificação"` agrupando descrição + horário + botão de teste + checkbox de som (CheckBox "Tocar som" era órfão entre seções).
+  - `GroupBox "Faixas de notificação (dias antes do vencimento)"` com layout 1-coluna sequencial decrescente: longa → média → curta → urgente (era 2×2 forçando ziguezague).
+  - Cada NumericUpDown agora tem sufixo "dias" em cinza reforçando a unidade.
+  - Sublabel explicativo "Da faixa mais distante (primeiro aviso) à mais crítica (último aviso):".
+  - **Botão único "Salvar configurações"** no rodapé direito, substituindo os 2 botões duplicados (`Salvar horário` + `Salvar faixas`). Salva horário + som + faixas atomicamente.
+- **Footer reordenado conforme convenção Windows**: `[Atualizar lista] [Ignorar certificado] [Fechar]` — Fechar mais à direita, isolada das ações de manipulação de dados.
+- **Ícone próprio do app** (`assets/CertExpiryMonitor.ico`, 7 tamanhos 16/24/32/48/64/128/256 px) embarcado como `EmbeddedResource` e referenciado via `<ApplicationIcon>` no `.csproj`. Substituiu o `SystemIcons.Information` genérico em `NotifyIcon` (bandeja) e `DetailsForm.Icon` (title bar / Alt-Tab). Gerador: `scripts/GenerateAppIcon.ps1` desenha programaticamente um certificado estilizado com selo "A1".
+- **`AppIcon` helper** (`Services/AppIcon.cs`): carrega o ícone embutido uma única vez (cache estático) com fallback para `SystemIcons.Information` se o resource não for encontrado.
+- **DetailsForm cresceu** `ClientSize = 940×500` (era 940×460) para acomodar a linha de busca; `MinimumSize` cresceu proporcionalmente.
+
+### Operacional — repositório Git
+
+- **`git init -b main`** + primeiro commit "Initial commit: CertExpiryMonitor v1.0.0" criado.
+- **`.gitignore` atualizado** para incluir `assets/preview-*.png` (gerados pelo script de preview do ícone).
+- **Remote `origin`** configurado para `https://github.com/andrejipa/CertExpiryMonitor.git`. Credenciais HTTPS já estão no Windows Credential Manager (auth chegou ao GitHub e respondeu "Repository not found").
+- **README com 4 badges** (CI build, tests passing, .NET 8, Windows 10/11) — URLs apontando para `andrejipa/CertExpiryMonitor`.
+- **Instruções no README** sobre como completar o push (criar repo em `github.com/new` + `git push -u origin main`).
+
 ### UI/UX — Round 2 (validado via screenshots + auditoria adversarial)
 
 - **`HighDpiMode = PerMonitorV2`** no `.csproj` (`<ApplicationHighDpiMode>`): textos nítidos em monitores 4K e setups multi-monitor com DPIs diferentes. Sem isso, o app fica borrado em DPI > 100%.

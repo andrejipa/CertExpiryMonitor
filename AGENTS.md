@@ -38,6 +38,9 @@ exibe o toast → `JsonStateStore` / `JsonSettingsStore` persistem estado em JSO
 | `scripts/Install-CurrentUser.ps1` | Instalação manual sem Inno Setup |
 | `scripts/Uninstall-CurrentUser.ps1` | Desinstalação manual |
 | `scripts/CaptureUi.ps1` | Automação de captura PNG da UI via `PrintWindow` + dump UIA (Win32 GDI, não exige desktop interativo) |
+| `scripts/GenerateAppIcon.ps1` | Gera o `.ico` do app desenhando programaticamente (7 tamanhos 16-256px) |
+| `assets/CertExpiryMonitor.ico` | Ícone embedded — referenciado em `<ApplicationIcon>` e via `AppIcon.cs` helper |
+| `Services/AppIcon.cs` | Helper que carrega o ícone embedded uma vez com cache estático |
 | `tests/…/ExpiryEvaluatorTests.cs` | 13 testes de lógica de notificação (thresholds padrão) |
 | `tests/…/ExpiryEvaluatorThresholdsTests.cs` | Testes com thresholds customizados |
 | `tests/…/JsonStateStoreTests.cs` | Persistência, migração de formato legado, robustez |
@@ -114,6 +117,7 @@ dotnet test --collect:"XPlat Code Coverage" --results-directory coverage
 | Sem suporte multi-idioma | Baixo | Strings PT-BR hardcoded. Aceitável para escopo SMB/uso pessoal brasileiro. |
 | Navegação por teclado completa em `DetailsForm` | Baixo | `AccessibleName`/`AccessibleDescription` agora setados nos controles principais; navegação Tab/Enter ainda não auditada manualmente. |
 | Dark mode | Baixo | Disponível apenas em .NET 9+ (`Application.SetColorMode`). Postergado até upgrade. |
+| Push para GitHub (`git push origin main`) | Operacional | Repo local existe e remote está configurado. Falta o usuário criar o repo em `github.com/new` (uma vez) — depois disso, push e CI rodam automaticamente. |
 
 ### Resolvidos nesta versão
 
