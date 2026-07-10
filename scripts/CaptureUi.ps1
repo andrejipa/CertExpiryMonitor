@@ -1,5 +1,5 @@
 # Captura screenshots do CertExpiryMonitor em execucao.
-# Usa PrintWindow (Win32) em vez de CopyFromScreen — funciona mesmo em sessoes
+# Usa PrintWindow (Win32) em vez de CopyFromScreen - funciona mesmo em sessoes
 # sem desktop interativo (RDP, agent, sessao bloqueada).
 # Uso: pwsh -NoProfile -File .\scripts\CaptureUi.ps1
 
@@ -18,7 +18,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 
-# Win32 helpers — usados ao inves de CopyFromScreen para evitar dependencia de desktop interativo.
+# Win32 helpers - usados ao inves de CopyFromScreen para evitar dependencia de desktop interativo.
 $signature = @'
 using System;
 using System.Runtime.InteropServices;
@@ -43,7 +43,7 @@ function Capture-Window([IntPtr]$hwnd, [string]$path) {
     $bmp = New-Object System.Drawing.Bitmap $w, $h
     $gfx = [System.Drawing.Graphics]::FromImage($bmp)
     $hdc = $gfx.GetHdc()
-    # PW_RENDERFULLCONTENT = 0x00000002 (Windows 8.1+) — captura conteudo composto inclusive controles.
+    # PW_RENDERFULLCONTENT = 0x00000002 (Windows 8.1+) - captura conteudo composto inclusive controles.
     $ok = [Win32]::PrintWindow($hwnd, $hdc, 2)
     $gfx.ReleaseHdc($hdc)
     if ($ok) {
@@ -53,26 +53,101 @@ function Capture-Window([IntPtr]$hwnd, [string]$path) {
     return $ok
 }
 
+function Stop-AppProcessesAndWait {
+    param([string]$TargetExePath)
+
+    $targetFullPath = [IO.Path]::GetFullPath($TargetExePath)
+    Get-AppProcesses |
+        Where-Object { Test-ProcessPathEquals $_.Path $targetFullPath } |
+        ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
+
+    $deadline = (Get-Date).AddSeconds(10)
+    do {
+        $remaining = @(Get-AppProcesses |
+            Where-Object { Test-ProcessPathEquals $_.Path $targetFullPath })
+        if ($remaining.Count -eq 0) {
+            return
+        }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+
+    throw "Nao foi possivel encerrar processos CertExpiryMonitor do alvo '$targetFullPath' antes da captura."
+}
+
+function Test-ProcessPathEquals([string]$Actual, [string]$Expected) {
+    -not [string]::IsNullOrWhiteSpace($Actual) -and
+        [IO.Path]::GetFullPath($Actual).Equals([IO.Path]::GetFullPath($Expected), [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Get-AppProcesses {
+    @(Get-Process CertExpiryMonitor -ErrorAction SilentlyContinue | ForEach-Object {
+        $path = $null
+        try { $path = $_.Path } catch { }
+        [pscustomobject]@{
+            Id = $_.Id
+            Path = $path
+        }
+    })
+}
+
+function Assert-NoForeignAppProcess([string]$TargetExePath) {
+    $targetFullPath = [IO.Path]::GetFullPath($TargetExePath)
+    $foreign = @(Get-AppProcesses |
+        Where-Object { -not (Test-ProcessPathEquals $_.Path $targetFullPath) })
+    if ($foreign.Count -gt 0) {
+        $list = ($foreign | ForEach-Object { " - PID $($_.Id): $($_.Path)" }) -join [Environment]::NewLine
+        throw "Existe outra instancia de CertExpiryMonitor fora do alvo da captura. Feche-a antes de rodar CaptureUi.ps1:$([Environment]::NewLine)$list"
+    }
+}
+
+function Get-UiaWindowsForProcess([int]$ProcessId) {
+    $auto = [System.Windows.Automation.AutomationElement]::RootElement
+    $processCondition = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, $ProcessId)
+    return $auto.FindAll([System.Windows.Automation.TreeScope]::Children, $processCondition)
+}
+
+function Wait-ForMainWindow([System.Diagnostics.Process]$Process, [int]$TimeoutMs) {
+    $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
+    do {
+        if ($Process.HasExited) {
+            Write-Error "Processo encerrou antes de capturar (ExitCode=$($Process.ExitCode))."
+            exit 1
+        }
+
+        $Process.Refresh()
+        if ($Process.MainWindowHandle -ne [IntPtr]::Zero) {
+            return $Process.MainWindowHandle
+        }
+
+        $windows = Get-UiaWindowsForProcess $Process.Id
+        if ($windows.Count -gt 0) {
+            $nativeHandle = $windows[0].Current.NativeWindowHandle
+            if ($nativeHandle -ne 0) {
+                return [IntPtr]$nativeHandle
+            }
+        }
+
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+
+    return [IntPtr]::Zero
+}
+
 if (!(Test-Path $OutDir)) { New-Item -ItemType Directory -Path $OutDir | Out-Null }
 
-Get-Process CertExpiryMonitor -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 800
+$ExePath = [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $ExePath).Path)
+Stop-AppProcessesAndWait $ExePath
+Assert-NoForeignAppProcess $ExePath
 
 $flag = "--$Mode"
 Write-Host "[1/4] Iniciando app com $flag ..."
 $proc = Start-Process -FilePath $ExePath -ArgumentList $flag -PassThru
-Start-Sleep -Milliseconds $WaitMs
 
-if ($proc.HasExited) {
-    Write-Error "Processo encerrou antes de capturar (ExitCode=$($proc.ExitCode))."
-    exit 1
-}
-
-$proc.Refresh()
-$hwnd = $proc.MainWindowHandle
+$hwnd = Wait-ForMainWindow $proc $WaitMs
+$mainHwnd = $hwnd
 
 if ($hwnd -eq [IntPtr]::Zero) {
-    Write-Warning "MainWindowHandle = 0 — janela nao detectada."
+    Write-Warning "MainWindowHandle = 0 - janela nao detectada."
 } else {
     [Win32]::ShowWindow($hwnd, 5) | Out-Null  # SW_SHOW
     [Win32]::SetForegroundWindow($hwnd) | Out-Null
@@ -88,9 +163,7 @@ if ($hwnd -eq [IntPtr]::Zero) {
 
 # UIA tree
 Write-Host "[3/4] Inspecionando arvore UIA ..."
-$auto = [System.Windows.Automation.AutomationElement]::RootElement
-$processCondition = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, $proc.Id)
-$processWindows = $auto.FindAll([System.Windows.Automation.TreeScope]::Children, $processCondition)
+$processWindows = Get-UiaWindowsForProcess $proc.Id
 
 $uiaReport = @()
 foreach ($win in $processWindows) {
@@ -109,6 +182,23 @@ foreach ($win in $processWindows) {
     }
 }
 $uiaReport | Out-File -FilePath (Join-Path $OutDir "03-uia-tree.txt") -Encoding utf8
+
+if ($mainHwnd -eq [IntPtr]::Zero -and $processWindows.Count -gt 0) {
+    $nativeHandle = $processWindows[0].Current.NativeWindowHandle
+    if ($nativeHandle -ne 0) {
+        $mainHwnd = [IntPtr]$nativeHandle
+        [Win32]::ShowWindow($mainHwnd, 5) | Out-Null  # SW_SHOW
+        [Win32]::SetForegroundWindow($mainHwnd) | Out-Null
+        Start-Sleep -Milliseconds 400
+
+        Write-Host "[2/4] Capturando janela principal via handle UIA (PrintWindow) ..."
+        if (Capture-Window $mainHwnd (Join-Path $OutDir "02-mainwindow.png")) {
+            Write-Host "      OK"
+        } else {
+            Write-Warning "      PrintWindow falhou via handle UIA"
+        }
+    }
+}
 
 # Alterna abas e captura
 Write-Host "[4/4] Alternando para cada aba ..."
@@ -134,9 +224,10 @@ if ($tabControl) {
             Start-Sleep -Milliseconds 700
             $proc.Refresh()
             $hwnd = $proc.MainWindowHandle
+            if ($hwnd -eq [IntPtr]::Zero) { $hwnd = $mainHwnd }
             [Win32]::SetForegroundWindow($hwnd) | Out-Null
             Start-Sleep -Milliseconds 300
-            $safeName = ($tabName -replace '[^a-zA-Z0-9çÇãáàâéêíóôõúüÁÀÂÃÉÊÍÓÔÕÚÜ]','_')
+            $safeName = ($tabName -replace '[^a-zA-Z0-9_-]','_')
             $okCap = Capture-Window $hwnd (Join-Path $OutDir "04-tab-$safeName.png")
             if (-not $okCap) { Write-Warning "    PrintWindow retornou false para '$tabName'" }
         } catch {
@@ -146,7 +237,7 @@ if ($tabControl) {
 }
 
 Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-Get-Process CertExpiryMonitor -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Stop-AppProcessesAndWait $ExePath
 
 Write-Host ""
 Write-Host "Capturas em: $OutDir"

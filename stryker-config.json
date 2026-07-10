@@ -1,0 +1,41 @@
+{
+  "stryker-config": {
+    "project": "CertExpiryMonitor.csproj",
+    "test-projects": [
+      "tests/CertExpiryMonitor.Tests/CertExpiryMonitor.Tests.csproj"
+    ],
+    "configuration": "Release",
+    "reporters": [
+      "html",
+      "cleartext",
+      "progress"
+    ],
+    "thresholds": {
+      "high": 70,
+      "low": 50,
+      "break": 50
+    },
+    "mutate": [
+      "Services/ExpiryEvaluator.cs",
+      "Services/CertificateCheckService.cs",
+      "Services/JsonStateStore.cs",
+      "Services/JsonSettingsStore.cs",
+      "Services/StartupRegistrationCommandBuilder.cs",
+      "Services/ToastActionArgumentParser.cs",
+      "Services/ToastXmlBuilder.cs",
+      "Services/CertificateDocumentHelpers.cs",
+      "Services/CertificateStatusHelpers.cs",
+      "Services/DiagnosticEventStore.cs",
+      "Services/DiagnosticRedactor.cs",
+      "Services/DiagnosticsBundleService.cs",
+      "Models/ExpiryThresholds.cs",
+      "!Services/DetailsForm.cs",
+      "!Services/StartupRegistration.cs",
+      "!Services/ToastNotifierService.cs",
+      "!Services/TrayApplicationContext.cs",
+      "!Services/*Window.cs",
+      "!Services/AppIcon.cs",
+      "!Program.cs"
+    ]
+  }
+}

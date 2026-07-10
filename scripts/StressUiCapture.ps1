@@ -41,8 +41,43 @@ function Capture-Window([IntPtr]$hwnd, [string]$path) {
     return $ok
 }
 
+function Test-ProcessPathEquals([string]$Actual, [string]$Expected) {
+    -not [string]::IsNullOrWhiteSpace($Actual) -and
+        [IO.Path]::GetFullPath($Actual).Equals([IO.Path]::GetFullPath($Expected), [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Get-AppProcesses {
+    @(Get-Process CertExpiryMonitor -ErrorAction SilentlyContinue | ForEach-Object {
+        $path = $null
+        try { $path = $_.Path } catch { }
+        [pscustomobject]@{
+            Id = $_.Id
+            Path = $path
+        }
+    })
+}
+
+function Stop-TargetAppProcesses([string]$TargetExePath) {
+    $targetFullPath = [IO.Path]::GetFullPath($TargetExePath)
+    Get-AppProcesses |
+        Where-Object { Test-ProcessPathEquals $_.Path $targetFullPath } |
+        ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
+}
+
+function Assert-NoForeignAppProcess([string]$TargetExePath) {
+    $targetFullPath = [IO.Path]::GetFullPath($TargetExePath)
+    $foreign = @(Get-AppProcesses |
+        Where-Object { -not (Test-ProcessPathEquals $_.Path $targetFullPath) })
+    if ($foreign.Count -gt 0) {
+        $list = ($foreign | ForEach-Object { " - PID $($_.Id): $($_.Path)" }) -join [Environment]::NewLine
+        throw "Existe outra instancia de CertExpiryMonitor fora do alvo do stress visual. Feche-a antes de rodar StressUiCapture.ps1:$([Environment]::NewLine)$list"
+    }
+}
+
 if (!(Test-Path $OutDir)) { New-Item -ItemType Directory -Path $OutDir | Out-Null }
-Get-Process CertExpiryMonitor -ErrorAction SilentlyContinue | Stop-Process -Force
+$ExePath = [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $ExePath).Path)
+Stop-TargetAppProcesses $ExePath
+Assert-NoForeignAppProcess $ExePath
 Start-Sleep -Milliseconds 800
 
 Write-Host "Iniciando app..."
@@ -120,7 +155,7 @@ foreach ($i in $inputs) {
 }
 
 Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-Get-Process CertExpiryMonitor -ErrorAction SilentlyContinue | Stop-Process -Force
+Stop-TargetAppProcesses $ExePath
 
 Write-Host ""
 Write-Host "Resumo:"

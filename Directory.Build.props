@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <!-- Mantem o grafo NuGet deterministico e permite restore locked no CI. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+</Project>

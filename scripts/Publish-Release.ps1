@@ -32,6 +32,10 @@ $root        = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $csproj      = Join-Path $root "CertExpiryMonitor.csproj"
 $issFile     = Join-Path $root "installer\CertExpiryMonitor.iss"
 $publishDir  = Join-Path $root "publish"
+$dotnet      = Join-Path $root ".dotnet-local\dotnet.exe"
+if (-not (Test-Path $dotnet)) {
+    $dotnet = "dotnet"
+}
 
 Write-Host "=== CertExpiryMonitor Release: v$Version ===" -ForegroundColor Cyan
 
@@ -67,17 +71,23 @@ if (Test-Path $publishDir) {
     Remove-Item $publishDir -Recurse -Force
 }
 
+& $dotnet restore $csproj --locked-mode
+if ($LASTEXITCODE -ne 0) {
+    throw "dotnet restore --locked-mode falhou com codigo $LASTEXITCODE"
+}
+
 $publishArgs = @(
     "publish", $csproj,
     "--configuration", "Release",
     "--runtime", "win-x64",
     "--self-contained", "true",
+    "--no-restore",
     "/p:PublishSingleFile=true",
     "/p:IncludeNativeLibrariesForSelfExtract=true",
     "--output", $publishDir
 )
 
-& dotnet @publishArgs
+& $dotnet @publishArgs
 if ($LASTEXITCODE -ne 0) {
     throw "dotnet publish falhou com codigo $LASTEXITCODE"
 }
