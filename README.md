@@ -1,13 +1,13 @@
 # CertExpiryMonitor
 
 [![Build and Test](https://github.com/andrejipa/CertExpiryMonitor/actions/workflows/build.yml/badge.svg)](https://github.com/andrejipa/CertExpiryMonitor/actions)
-![Tests](https://img.shields.io/badge/tests-393%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-394%20passing-brightgreen)
 ![.NET](https://img.shields.io/badge/.NET-8.0-512BD4)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)
 
 Aplicativo Windows leve para monitorar certificados digitais A1 no perfil do usuário logado.
 
-> **Status:** 393 testes passando (build limpo, 0 warnings); cobertura `44,73%` de linhas / `52,25%` de branches; Stryker `70,31%`; publish single-file deve permanecer abaixo de 77 MB.
+> **Status:** 394 testes passando (build limpo, 0 warnings); cobertura `44,88%` de linhas / `52,32%` de branches; Stryker `70,31%`; publish single-file deve permanecer abaixo de 77 MB.
 
 **Repositório:** https://github.com/andrejipa/CertExpiryMonitor
 
@@ -124,7 +124,7 @@ Invoke-WebRequest -UseBasicParsing 'https://dot.net/v1/dotnet-install.ps1' -OutF
 
 A pasta `.dotnet-local\` está no `.gitignore`. O CI no GitHub Actions já tem o SDK pré-instalado via `actions/setup-dotnet`.
 
-**Cobertura dos testes (393 casos, todos verdes):**
+**Cobertura dos testes (394 casos, todos verdes):**
 
 | Suite | O que cobre |
 |---|---|

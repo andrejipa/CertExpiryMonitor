@@ -21,7 +21,7 @@ Todas as mudanças notáveis neste projeto. Formato baseado em
 
 ### Validação
 
-- Build Release sem warnings, 393 testes passando e cobertura `44,73%` de linhas / `52,25%` de branches; coordenador com `100%` de linhas / `96,42%` de branches.
+- Build Release sem warnings, 394 testes passando e cobertura `44,88%` de linhas / `52,32%` de branches; coordenador com `100%` de linhas / `96,42%` de branches.
 - Stryker final `70,31%`; na contagem normalizada do relatório HTML, `69,84%` contra baseline preservado `67,90%`.
 - Publish single-file `win-x64` com `75,52 MiB`; instalador Inno Setup com `70,31 MiB` e SHA-256 `CEC6987EF1130D10FF83E22FB79BCE579319B710E1FE5FA26F7164AE6E4600E9`.
 - BugHunt E2E `-Maximum -KeepArtifacts` concluído em `artifacts\bughunt\20260710-020702`, incluindo SQLite, logs, PNGs e UIA; neste PC o Task Scheduler negou acesso e o fallback `HKCU\Run` foi validado.

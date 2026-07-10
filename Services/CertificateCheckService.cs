@@ -16,6 +16,7 @@ public sealed class CertificateCheckService
     private readonly ExpiryEvaluator _expiryEvaluator;
     private readonly FileLogger _logger;
     private readonly DiagnosticEventStore? _diagnosticEvents;
+    private readonly Func<DateTime> _now;
     // Guard atomico entre timer thread (verificacao diaria) e UI thread (botoes de menu).
     // 0 = livre, 1 = em execucao.
     private int _isChecking;
@@ -30,6 +31,25 @@ public sealed class CertificateCheckService
         ExpiryEvaluator expiryEvaluator,
         FileLogger logger,
         DiagnosticEventStore? diagnosticEvents = null)
+        : this(
+            settingsStore,
+            stateStore,
+            certificateReader,
+            expiryEvaluator,
+            logger,
+            diagnosticEvents,
+            () => DateTime.Now)
+    {
+    }
+
+    internal CertificateCheckService(
+        JsonSettingsStore settingsStore,
+        JsonStateStore stateStore,
+        CertificateReader certificateReader,
+        ExpiryEvaluator expiryEvaluator,
+        FileLogger logger,
+        DiagnosticEventStore? diagnosticEvents,
+        Func<DateTime> now)
     {
         _settingsStore    = settingsStore;
         _stateStore       = stateStore;
@@ -37,6 +57,7 @@ public sealed class CertificateCheckService
         _expiryEvaluator  = expiryEvaluator;
         _logger           = logger;
         _diagnosticEvents = diagnosticEvents;
+        _now              = now ?? throw new ArgumentNullException(nameof(now));
     }
 
     /// <summary>
@@ -83,8 +104,8 @@ public sealed class CertificateCheckService
                 "Verificacao de certificados iniciada.",
                 new { ignoreConfiguredTime, ignoreLastCheckDate, forceReminder });
 
-            var today = DateOnly.FromDateTime(DateTime.Today);
-            var now   = DateTime.Now;
+            var now = _now();
+            var today = DateOnly.FromDateTime(now);
 
             if (!ignoreConfiguredTime && now.TimeOfDay < settings.DailyCheckTime)
             {

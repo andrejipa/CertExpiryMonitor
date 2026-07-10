@@ -59,7 +59,7 @@ public sealed class NotificationCheckCoordinatorTests : IDisposable
     public void ConfiguredTimeSkipDoesNotRewriteSettings()
     {
         var settingsStore = new JsonSettingsStore(_paths, _logger);
-        Assert.True(settingsStore.Save(new AppSettings { DailyCheckTime = TimeSpan.FromHours(48) }));
+        Assert.True(settingsStore.Save(new AppSettings { DailyCheckTime = TimeSpan.FromHours(10) }));
         var before = File.ReadAllText(_paths.SettingsPath);
         var stateStore = new JsonStateStore(_paths, _logger);
         var check = new CertificateCheckService(
@@ -67,13 +67,36 @@ public sealed class NotificationCheckCoordinatorTests : IDisposable
             stateStore,
             new FixedCertificateReader(_logger, []),
             new ExpiryEvaluator(),
-            _logger);
+            _logger,
+            diagnosticEvents: null,
+            now: () => new DateTime(2026, 7, 10, 9, 0, 0));
         var coordinator = new NotificationCheckCoordinator(settingsStore, check, _logger);
 
         var result = coordinator.Run(new CheckCycleRequest(false, false), _ => true);
 
         Assert.Equal(CheckCycleStatus.Skipped, result.Status);
         Assert.Equal(before, File.ReadAllText(_paths.SettingsPath));
+    }
+
+    [Fact]
+    public void ConfiguredTimeReachedRunsCheckDeterministically()
+    {
+        var settingsStore = new JsonSettingsStore(_paths, _logger);
+        Assert.True(settingsStore.Save(new AppSettings { DailyCheckTime = TimeSpan.FromHours(9) }));
+        var stateStore = new JsonStateStore(_paths, _logger);
+        var check = new CertificateCheckService(
+            settingsStore,
+            stateStore,
+            new FixedCertificateReader(_logger, []),
+            new ExpiryEvaluator(),
+            _logger,
+            diagnosticEvents: null,
+            now: () => new DateTime(2026, 7, 10, 10, 0, 0));
+        var coordinator = new NotificationCheckCoordinator(settingsStore, check, _logger);
+
+        var result = coordinator.Run(new CheckCycleRequest(false, false), _ => true);
+
+        Assert.Equal(CheckCycleStatus.CompletedNoDue, result.Status);
     }
 
     [Fact]
