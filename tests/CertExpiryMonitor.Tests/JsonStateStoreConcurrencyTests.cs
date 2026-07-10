@@ -63,6 +63,7 @@ public sealed class JsonStateStoreConcurrencyTests : IDisposable
         // O registro carregado deve ser um dos que foram salvos (thumbprint comeca com "THUMBPRINT-")
         var entry = loaded.Values.First();
         Assert.StartsWith("THUMBPRINT-", entry.Thumbprint, StringComparison.OrdinalIgnoreCase);
+        AssertEncryptedOnDisk();
     }
 
     [Fact]
@@ -145,5 +146,16 @@ public sealed class JsonStateStoreConcurrencyTests : IDisposable
         // Apos a tempestade, qualquer Load deve voltar dados validos.
         var loaded = _store.Load();
         Assert.Single(loaded);
+        AssertEncryptedOnDisk();
+    }
+
+    private void AssertEncryptedOnDisk()
+    {
+        var json = File.ReadAllText(_paths.StatePath);
+
+        Assert.Contains("dpapi-current-user", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("THUMBPRINT-", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("\"records\"", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("\"thumbprint\"", json, StringComparison.OrdinalIgnoreCase);
     }
 }

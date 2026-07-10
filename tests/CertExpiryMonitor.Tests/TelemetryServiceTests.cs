@@ -46,6 +46,18 @@ public sealed class TelemetryServiceTests : IDisposable
     }
 
     [Fact]
+    public void IncrementRecreatesMissingDataDirectory()
+    {
+        Directory.Delete(_paths.RootDirectory, recursive: true);
+        _telemetry.Enabled = true;
+
+        _telemetry.Increment(t => t.TotalChecks++);
+
+        Assert.True(File.Exists(_paths.TelemetryPath));
+        Assert.Equal(1, _telemetry.Load().TotalChecks);
+    }
+
+    [Fact]
     public void Load_ReturnsEmptyEnvelopeWhenFileDoesNotExist()
     {
         var env = _telemetry.Load();
@@ -65,6 +77,85 @@ public sealed class TelemetryServiceTests : IDisposable
         _telemetry.Reset();
 
         Assert.Equal(0, _telemetry.Load().TotalChecks);
+    }
+
+    [Fact]
+    public void Load_RejectsOversizedTelemetryFile()
+    {
+        var giant = "{\"TotalChecks\":\"" + new string('9', 2_000_000) + "\"}";
+        File.WriteAllText(_paths.TelemetryPath, giant);
+
+        var loaded = _telemetry.Load();
+
+        Assert.Equal(0, loaded.TotalChecks);
+        Assert.False(File.Exists(_paths.TelemetryPath));
+        Assert.NotEmpty(Directory.GetFiles(_tempDir, "telemetry.json.corrupt-*"));
+    }
+
+    [Fact]
+    public void RepeatedCorruptTelemetryPreservesEveryCorruptFile()
+    {
+        File.WriteAllText(_paths.TelemetryPath, "{ primeiro telemetry quebrado");
+        _ = _telemetry.Load();
+
+        File.WriteAllText(_paths.TelemetryPath, "{ segundo telemetry quebrado");
+        _ = _telemetry.Load();
+
+        var corruptFiles = Directory.GetFiles(_tempDir, "telemetry.json.corrupt-*");
+        Assert.Equal(2, corruptFiles.Length);
+    }
+
+    [Fact]
+    public void TelemetryFileAtExactSizeLimitStillLoads()
+    {
+        File.WriteAllText(_paths.TelemetryPath, CreateTelemetryEnvelopeWithExactLength(1_048_576));
+
+        var loaded = _telemetry.Load();
+
+        Assert.Equal(42, loaded.TotalChecks);
+        Assert.True(File.Exists(_paths.TelemetryPath));
+        Assert.Empty(Directory.GetFiles(_tempDir, "telemetry.json.corrupt-*"));
+    }
+
+    [Fact]
+    public void Load_WithStringVersionStillLoadsCounters()
+    {
+        File.WriteAllText(_paths.TelemetryPath, """
+            {
+              "version": "1",
+              "createdAt": "2026-05-13T00:00:00Z",
+              "updatedAt": "2026-05-13T01:00:00Z",
+              "totalChecks": 42,
+              "notificationsShown": 7
+            }
+            """);
+
+        var loaded = _telemetry.Load();
+
+        Assert.Equal(1, loaded.Version);
+        Assert.Equal(42, loaded.TotalChecks);
+        Assert.Equal(7, loaded.NotificationsShown);
+        Assert.Empty(Directory.GetFiles(_tempDir, "telemetry.json.corrupt-*"));
+    }
+
+    [Fact]
+    public void Increment_WithStringVersionPreservesExistingCounters()
+    {
+        File.WriteAllText(_paths.TelemetryPath, """
+            {
+              "version": "1",
+              "createdAt": "2026-05-13T00:00:00Z",
+              "updatedAt": "2026-05-13T01:00:00Z",
+              "totalChecks": 42
+            }
+            """);
+        _telemetry.Enabled = true;
+
+        _telemetry.Increment(t => t.TotalChecks++);
+
+        var loaded = _telemetry.Load();
+        Assert.Equal(43, loaded.TotalChecks);
+        Assert.Empty(Directory.GetFiles(_tempDir, "telemetry.json.corrupt-*"));
     }
 
     [Fact]
@@ -94,5 +185,14 @@ public sealed class TelemetryServiceTests : IDisposable
 
         // CreatedAt nao deve mudar entre incrementos (so e setado na criacao do arquivo)
         Assert.Equal(firstCreate, secondCreate);
+    }
+
+    private static string CreateTelemetryEnvelopeWithExactLength(int length)
+    {
+        const string prefix = "{\"version\":1,\"createdAt\":\"2026-05-13T00:00:00Z\",\"updatedAt\":\"2026-05-13T00:00:00Z\",\"totalChecks\":42,\"padding\":\"";
+        const string suffix = "\"}";
+        var paddingLength = length - prefix.Length - suffix.Length;
+        Assert.True(paddingLength >= 0);
+        return prefix + new string('x', paddingLength) + suffix;
     }
 }
