@@ -1,13 +1,13 @@
 # CertExpiryMonitor
 
 [![Build and Test](https://github.com/andrejipa/CertExpiryMonitor/actions/workflows/build.yml/badge.svg)](https://github.com/andrejipa/CertExpiryMonitor/actions)
-![Tests](https://img.shields.io/badge/tests-335%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-377%20passing-brightgreen)
 ![.NET](https://img.shields.io/badge/.NET-8.0-512BD4)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)
 
 Aplicativo Windows leve para monitorar certificados digitais A1 no perfil do usuário logado.
 
-> **Status:** 335 testes passando (build limpo, 0 warnings); Stryker global `71,67%`; publish single-file validado em `75,50 MB`.
+> **Status:** 377 testes passando (build limpo, 0 warnings); cobertura `44,73%` de linhas / `52,10%` de branches; publish single-file deve permanecer abaixo de 77 MB.
 
 **Repositório:** https://github.com/andrejipa/CertExpiryMonitor
 
@@ -16,6 +16,7 @@ Aplicativo Windows leve para monitorar certificados digitais A1 no perfil do usu
 - `Program`: inicialização, mutex de instância única e composição dos serviços.
 - `TrayApplicationContext`: host em background com ícone de bandeja, timer diário, configuração de horário e ações de notificação.
 - `CertificateCheckService`: encapsula a lógica de verificação (guards de horário/data/hash, cálculo do snapshot hash).
+- `NotificationCheckCoordinator`: coordena check, tentativa de aviso, `MarkNotified` e persistência final sem depender de WinForms.
 - `CertificateReader`: lê apenas `CurrentUser\My` com `X509Store(StoreName.My, StoreLocation.CurrentUser)` em modo somente leitura.
 - `ExpiryEvaluator`: aplica as faixas configuradas, deduplica por thumbprint e respeita estados persistidos.
 - `ExpiryThresholds`: modelo de faixas configuráveis (padrão: 30/15/7/1 dias); `Normalized()` garante ordering.
@@ -30,7 +31,7 @@ Aplicativo Windows leve para monitorar certificados digitais A1 no perfil do usu
 
 - Escopo limitado a `CurrentUser\My`.
 - Certificados considerados: `HasPrivateKey == true`, thumbprint presente e `NotAfter` válido.
-- Estados: `None`, `Notified30`, `Notified15`, `Notified7`, `Notified1`, `Dismissed`.
+- Estados: `None`, `NotifiedLong`, `NotifiedMedium`, `NotifiedShort`, `NotifiedUrgent`, `Dismissed` (valores numéricos legados preservados no JSON).
 - Faixas de notificação configuráveis pelo usuário (padrão: 30/15/7/1 dias antes do vencimento).
 - Verificação automática diária no horário configurado; skip se já verificou hoje com os mesmos certificados (SHA-256 do snapshot).
 - Atraso inicial padrão de 5 minutos após login.
@@ -69,17 +70,10 @@ Aplicativo Windows leve para monitorar certificados digitais A1 no perfil do usu
 ## Edge cases
 
 - Certificado renovado normalmente recebe novo thumbprint e será tratado como novo certificado.
-- Certificado expirado há mais de um dia é ignorado pelas faixas atuais.
+- Qualquer certificado expirado (`daysRemaining < 0`) é ignorado pelas faixas de notificação.
 - Certificados duplicados no store são consolidados por thumbprint.
 - JSON corrompido é ignorado com fallback seguro; a escrita atômica reduz a chance de corrupção.
 - Se o usuário executar verificação manual, ela conta como verificação do dia.
-
-## Melhorias enterprise
-
-- Assinar o executável e publicar via MSIX/Intune/SCCM.
-- Adicionar EventLog opcional com níveis de log controlados por política.
-- Criar templates ADMX/GPO para horário padrão e bloqueio de configurações.
-- Adicionar telemetria local opt-in sem rede, por exemplo contadores no EventLog.
 
 ## Como compilar
 
@@ -130,7 +124,7 @@ Invoke-WebRequest -UseBasicParsing 'https://dot.net/v1/dotnet-install.ps1' -OutF
 
 A pasta `.dotnet-local\` está no `.gitignore`. O CI no GitHub Actions já tem o SDK pré-instalado via `actions/setup-dotnet`.
 
-**Cobertura dos testes (335 casos, todos verdes):**
+**Cobertura dos testes (377 casos, todos verdes):**
 
 | Suite | O que cobre |
 |---|---|
@@ -141,6 +135,8 @@ A pasta `.dotnet-local\` está no `.gitignore`. O CI no GitHub Actions já tem o
 | `JsonStateStoreConcurrencyTests` | Mutex global sob race: `Parallel.For` Save+Load não corrompe, não lança exceções |
 | `JsonSettingsStoreTests` | Envelope versionado v1, compat com formato legado, envelope sem `version`/com `version` malformado, migração automática, JSON corrompido preservado |
 | `CertificateCheckServiceTests` | Guards de skip (horário/data/hash), snapshot hash com deduplicação por thumbprint, race do `_isChecking` entre threads, null guards |
+| `NotificationCheckCoordinatorTests` | Ciclo completo: sem pendências, notificação aceita/rejeitada, falhas de estado/settings, retry e reminder persistido |
+| `StoreReadFailureTests` | Timeout e IO transitório em settings/state sem sobrescrita ou promoção de defaults |
 | `CertificateDocumentHelpersTests` | `FormatDocument` (CPF/CNPJ), proteção contra texto com dígitos embutidos, `ParseHolder`, `GetCommonNameFallback` |
 | `CertificateStatusHelpersTests` | `GetStatusText`/`GetStatusCategory` com thresholds padrão e customizados — garante que o grid colore corretamente quando o usuário muda as faixas |
 | `CertificateReaderTests` | Certificado sem chave privada é ignorado |

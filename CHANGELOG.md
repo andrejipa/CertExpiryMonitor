@@ -5,7 +5,18 @@ Todas as mudanças notáveis neste projeto. Formato baseado em
 
 ---
 
-## [Não publicado] — 2026-05-23
+## [1.0.9] — 2026-07-10
+
+### Corrigido
+
+- **Falhas de leitura nao viram defaults salvaveis**: settings/state agora usam `TryLoad`; timeout, IO, acesso, JSON ou DPAPI invalidos abortam a operacao sem sobrescrever dados existentes.
+- **Leitura X.509 explicita**: falha total ou parcial no `CurrentUser\\My` nao consolida `LastCheckDate` nem o hash do snapshot e agenda retry seguro.
+- **Ciclo de notificacao testavel**: `NotificationCheckCoordinator` centraliza check, tentativa de aviso, `MarkNotified` e persistencia final fora do WinForms.
+- **Retencao SQLite fora do hot path**: inserts de diagnostico nao executam mais retencao/checkpoint/VACUUM; manutencao roda em worker no startup e depois do check diario.
+
+### Testes
+
+- Regressões deterministicas para timeout/IO dos stores, falha total/parcial X.509, matriz do coordenador e manutencao SQLite explicita.
 
 ### Testes
 
@@ -14,7 +25,7 @@ Todas as mudanças notáveis neste projeto. Formato baseado em
 
 ### Validação
 
-- Build Release sem warnings, 335 testes passando, Stryker global `71,67%`.
+- Build Release sem warnings, 377 testes passando e cobertura `44,73%` de linhas / `52,10%` de branches; coordenador com `100%` de linhas / `96,42%` de branches.
 - Scores por arquivo de diagnóstico: `DiagnosticEventStore.cs` `71,69%`, `DiagnosticRedactor.cs` `84,87%`, `DiagnosticsBundleService.cs` `72,48%`.
 - Publish single-file `win-x64` medido em `artifacts\release-size\sqlite-20260523-124219`: `75,50 MB`, delta `+0,99 MB` (`+1,33%`) contra baseline pré-SQLite `74,51 MB`, abaixo do limite de `77 MB`.
 - BugHunt E2E `-Maximum -KeepArtifacts` validado em `artifacts\bughunt\20260523-124304`.

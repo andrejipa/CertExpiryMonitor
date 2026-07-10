@@ -24,6 +24,8 @@ em `diagnostics.db`.
 | `Program.cs` | Composição (DI manual), mutex de instância única |
 | `Services/TrayApplicationContext.cs` | Orquestração UI, timer, menu, callbacks do DetailsForm |
 | `Services/CertificateCheckService.cs` | Lógica de verificação, guards de skip (horário/data/hash) |
+| `Services/NotificationCheckCoordinator.cs` | Coordena check → notificação → MarkNotified → persistência; retorna status explícito e retry |
+| `Models/CertificateReadResult.cs` | Resultado da leitura X.509: sucesso, falha do store ou falha parcial |
 | `Services/ExpiryEvaluator.cs` | Decisão de bucket, `BuildPlan` / `BuildReminderPlan` |
 | `Services/ToastNotifierService.cs` | Toast XML via WinRT unpackaged, atalho COM, toast compacto de lembrete |
 | `Services/DetailsForm.cs` | Janela de detalhes + configurações; delega helpers para `CertificateDocumentHelpers` |
@@ -58,6 +60,8 @@ em `diagnostics.db`.
 | `tests/…/JsonStateStoreTests.cs` | Persistência, migração de formato legado, robustez |
 | `tests/…/ExpiryThresholdsTests.cs` | `Normalized()` com valores inválidos / invertidos |
 | `tests/…/CertificateCheckServiceTests.cs` | Guards de skip, hash de snapshot |
+| `tests/…/NotificationCheckCoordinatorTests.cs` | Matriz do ciclo de notificação e falhas de persistência |
+| `tests/…/StoreReadFailureTests.cs` | Timeout/IO dos stores sem sobrescrita de dados válidos |
 | `tests/…/CertificateDocumentHelpersTests.cs` | `FormatDocument` (CPF/CNPJ), `ParseHolder`, `GetCommonNameFallback` |
 | `tests/…/CertificateStatusHelpersTests.cs` | `GetStatusText` e `GetStatusCategory` — thresholds padrão e customizados, boundaries, estados Dismissed/Notified |
 | `tests/…/PropertyBasedTests.cs` | FsCheck fuzz/property tests de parsing, thresholds, stores JSON, helpers e toast XML |
@@ -161,6 +165,10 @@ Estes itens já apareceram em auditorias anteriores e foram **explicitamente rej
 
 | Item | Solução |
 |---|---|
+| Falha transitória de settings/state virava vazio/default salvável | Stores usam `TryLoad`; chamadores abortam mutações e checks fazem retry em 5 minutos. |
+| Falha do store X.509 virava check vazio bem-sucedido | `CertificateReadResult` distingue sucesso, falha total e parcial; checks incompletos não consolidam fingerprint. |
+| Fluxo de notificação preso ao TrayApplicationContext | Extraído para `NotificationCheckCoordinator`, coberto por testes sem WinForms. |
+| Retenção/VACUUM em cada evento SQLite | `RunMaintenance` explícito executado em worker fora do caminho de INSERT. |
 | Thresholds hardcoded no DetailsForm (`<= 7`, `<= 30`) | Extraído para `CertificateStatusHelpers`; usa `ExpiryThresholds.Level7`/`Level30` normalizado. |
 | Summary panel não atualizava ao salvar thresholds | Callback `onThresholdsSaved` reclassifica linhas + refaz cores e contagens. |
 | `AppPaths.IDisposable` vestigial | Removido; `Program.cs` usa `var paths`. |
