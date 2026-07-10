@@ -35,6 +35,27 @@ public sealed class NotificationCheckCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public void NoDueCertificatesClearsPersistedForcedReminder()
+    {
+        var coordinator = CreateCoordinator([], out var settingsStore, out _, forceReminder: true);
+
+        var result = coordinator.Run(new CheckCycleRequest(true, true), _ => throw new InvalidOperationException());
+
+        Assert.Equal(CheckCycleStatus.CompletedNoDue, result.Status);
+        Assert.True(settingsStore.TryLoad(out var saved));
+        Assert.False(saved.ForceNextNotificationReminder);
+    }
+
+    [Fact]
+    public void RunRejectsNullRequestAndNotificationCallback()
+    {
+        var coordinator = CreateCoordinator([], out _, out _);
+
+        Assert.Throws<ArgumentNullException>(() => coordinator.Run(null!, _ => true));
+        Assert.Throws<ArgumentNullException>(() => coordinator.Run(new CheckCycleRequest(true, true), null!));
+    }
+
+    [Fact]
     public void ConfiguredTimeSkipDoesNotRewriteSettings()
     {
         var settingsStore = new JsonSettingsStore(_paths, _logger);
@@ -110,7 +131,21 @@ public sealed class NotificationCheckCoordinatorTests : IDisposable
         Assert.Equal(CheckCycleStatus.StatePersistFailed, result.Status);
         Assert.True(settingsStore.TryLoad(out var settings));
         Assert.Null(settings.LastCheckDate);
+        Assert.Equal(string.Empty, settings.LastCertificateSnapshotHash);
         Assert.True(settings.ForceNextNotificationReminder);
+    }
+
+    [Theory]
+    [InlineData(CheckCycleStatus.Skipped, false)]
+    [InlineData(CheckCycleStatus.CompletedNoDue, false)]
+    [InlineData(CheckCycleStatus.NotificationShown, false)]
+    [InlineData(CheckCycleStatus.NotificationFailed, true)]
+    [InlineData(CheckCycleStatus.ReadFailed, true)]
+    [InlineData(CheckCycleStatus.StatePersistFailed, true)]
+    [InlineData(CheckCycleStatus.SettingsPersistFailed, true)]
+    public void CheckCycleResultExposesRetryOnlyForRecoverableFailures(CheckCycleStatus status, bool expected)
+    {
+        Assert.Equal(expected, new CheckCycleResult(status).ShouldRetry);
     }
 
     [Fact]
@@ -186,6 +221,36 @@ public sealed class NotificationCheckCoordinatorTests : IDisposable
         Assert.NotNull(normalizedInvalid.Thresholds);
         Assert.Equal(TimeSpan.FromHours(8), normalizedValid.DailyCheckTime);
         Assert.Equal(10, normalizedValid.InitialDelayMinutes);
+    }
+
+    [Theory]
+    [InlineData(-1, 9)]
+    [InlineData(0, 0)]
+    [InlineData(23, 23)]
+    [InlineData(24, 9)]
+    public void NormalizeSettingsHonorsDailyTimeBoundaries(int inputHours, int expectedHours)
+    {
+        var settings = new AppSettings { DailyCheckTime = TimeSpan.FromHours(inputHours) };
+
+        var normalized = NotificationCheckCoordinator.NormalizeSettings(settings);
+
+        Assert.Equal(TimeSpan.FromHours(expectedHours), normalized.DailyCheckTime);
+    }
+
+    [Fact]
+    public void NormalizeSettingsPreservesAndNormalizesCustomThresholds()
+    {
+        var settings = new AppSettings
+        {
+            Thresholds = new ExpiryThresholds { Level30 = 40, Level15 = 20, Level7 = 10, Level1 = 2 }
+        };
+
+        var normalized = NotificationCheckCoordinator.NormalizeSettings(settings);
+
+        Assert.Equal(40, normalized.Thresholds.Level30);
+        Assert.Equal(20, normalized.Thresholds.Level15);
+        Assert.Equal(10, normalized.Thresholds.Level7);
+        Assert.Equal(2, normalized.Thresholds.Level1);
     }
 
     [Fact]

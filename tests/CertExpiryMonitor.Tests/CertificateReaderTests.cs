@@ -94,6 +94,7 @@ public sealed class CertificateReaderTests
             Assert.Equal(CertificateReadStatus.StoreFailure, result.Status);
             Assert.False(result.IsComplete);
             Assert.Empty(result.Certificates);
+            Assert.Equal(1, result.FailedCertificates);
         }
         finally
         {
@@ -128,6 +129,65 @@ public sealed class CertificateReaderTests
             Assert.Equal(1, result.FailedCertificates);
             Assert.Single(result.Certificates);
             Assert.Equal("First", result.Certificates[0].SimpleName);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    [Fact]
+    public void SuccessfulScanReturnsCompleteResultWithoutFailures()
+    {
+        using var certificate = CreateCertificate(hasPrivateKey: true, commonName: "Complete", A1PolicyOid);
+        var root = Path.Combine(Path.GetTempPath(), $"CertificateReader-{Guid.NewGuid():N}");
+        try
+        {
+            var reader = new CertificateReader(
+                new FileLogger(new AppPaths(root)),
+                inspect => inspect(certificate),
+                CertificateReader.TryCreateSnapshot);
+
+            var result = reader.ReadCurrentUserPersonalCertificates();
+
+            Assert.Equal(CertificateReadStatus.Success, result.Status);
+            Assert.True(result.IsComplete);
+            Assert.Equal(0, result.FailedCertificates);
+            Assert.Single(result.Certificates);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    [Fact]
+    public void DuplicateThumbprintKeepsCertificateWithLatestExpiration()
+    {
+        using var certificate = CreateCertificate(hasPrivateKey: true, commonName: "Duplicate", A1PolicyOid);
+        var root = Path.Combine(Path.GetTempPath(), $"CertificateReader-{Guid.NewGuid():N}");
+        var calls = 0;
+        try
+        {
+            var reader = new CertificateReader(
+                new FileLogger(new AppPaths(root)),
+                inspect =>
+                {
+                    inspect(certificate);
+                    inspect(certificate);
+                },
+                _ => new CertificateSnapshot(
+                    "AABBCC",
+                    "CN=Duplicate",
+                    "CN=Issuer",
+                    DateTime.Today.AddDays(++calls == 1 ? 5 : 30),
+                    calls.ToString()));
+
+            var result = reader.ReadCurrentUserPersonalCertificates();
+
+            var snapshot = Assert.Single(result.Certificates);
+            Assert.Equal(DateTime.Today.AddDays(30), snapshot.NotAfter);
+            Assert.Equal("2", snapshot.SerialNumber);
         }
         finally
         {

@@ -39,8 +39,14 @@
 
   <ItemGroup>
     <Compile Remove="tests\**\*.cs" />
+    <Compile Remove="artifacts\**\*.cs" />
+    <Compile Remove="StrykerOutput\**\*.cs" />
     <EmbeddedResource Remove="tests\**\*" />
+    <EmbeddedResource Remove="artifacts\**\*" />
+    <EmbeddedResource Remove="StrykerOutput\**\*" />
     <None Remove="tests\**\*" />
+    <None Remove="artifacts\**\*" />
+    <None Remove="StrykerOutput\**\*" />
   </ItemGroup>
 
   <ItemGroup>
