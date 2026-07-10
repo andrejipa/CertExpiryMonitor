@@ -10,7 +10,10 @@ public sealed class ExpiryEvaluator
         DateOnly today,
         ExpiryThresholds? thresholds = null)
     {
-        return BuildPlan(certificates, state, today, thresholds ?? new ExpiryThresholds(), includeAlreadyNotified: false);
+        ArgumentNullException.ThrowIfNull(certificates);
+        ArgumentNullException.ThrowIfNull(state);
+
+        return BuildPlan(certificates, state, today, (thresholds ?? new ExpiryThresholds()).Normalized(), includeAlreadyNotified: false);
     }
 
     public NotificationPlan BuildReminderPlan(
@@ -19,7 +22,10 @@ public sealed class ExpiryEvaluator
         DateOnly today,
         ExpiryThresholds? thresholds = null)
     {
-        return BuildPlan(certificates, state, today, thresholds ?? new ExpiryThresholds(), includeAlreadyNotified: true);
+        ArgumentNullException.ThrowIfNull(certificates);
+        ArgumentNullException.ThrowIfNull(state);
+
+        return BuildPlan(certificates, state, today, (thresholds ?? new ExpiryThresholds()).Normalized(), includeAlreadyNotified: true);
     }
 
     private NotificationPlan BuildPlan(
@@ -34,8 +40,8 @@ public sealed class ExpiryEvaluator
 
         foreach (var certificate in certificates)
         {
-            var thumbprint = JsonStateStore.NormalizeThumbprint(certificate.Thumbprint);
-            if (!processedThumbprints.Add(thumbprint))
+            if (!TryNormalizeThumbprint(certificate.Thumbprint, out var thumbprint) ||
+                !processedThumbprints.Add(thumbprint))
             {
                 continue;
             }
@@ -70,9 +76,16 @@ public sealed class ExpiryEvaluator
 
     public void MarkNotified(NotificationPlan plan, Dictionary<string, CertificateStateRecord> state, DateTimeOffset now)
     {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(state);
+
         foreach (var item in plan.DueCertificates)
         {
-            var thumbprint = JsonStateStore.NormalizeThumbprint(item.Certificate.Thumbprint);
+            if (!TryNormalizeThumbprint(item.Certificate.Thumbprint, out var thumbprint))
+            {
+                continue;
+            }
+
             var record = GetOrCreateRecord(state, item.Certificate, thumbprint);
             if (record.State == CertificateNotificationState.Dismissed)
             {
@@ -87,7 +100,14 @@ public sealed class ExpiryEvaluator
 
     public void DismissCertificate(string thumbprint, Dictionary<string, CertificateStateRecord> state)
     {
-        var normalized = JsonStateStore.NormalizeThumbprint(thumbprint);
+        ArgumentNullException.ThrowIfNull(thumbprint);
+        ArgumentNullException.ThrowIfNull(state);
+
+        if (!TryNormalizeThumbprint(thumbprint, out var normalized))
+        {
+            return;
+        }
+
         if (!state.TryGetValue(normalized, out var record))
         {
             record = new CertificateStateRecord { Thumbprint = normalized };
@@ -99,6 +119,9 @@ public sealed class ExpiryEvaluator
 
     public void DismissCertificates(IEnumerable<string> thumbprints, Dictionary<string, CertificateStateRecord> state)
     {
+        ArgumentNullException.ThrowIfNull(thumbprints);
+        ArgumentNullException.ThrowIfNull(state);
+
         foreach (var thumbprint in thumbprints)
         {
             DismissCertificate(thumbprint, state);
@@ -107,7 +130,14 @@ public sealed class ExpiryEvaluator
 
     public void RestoreCertificate(string thumbprint, Dictionary<string, CertificateStateRecord> state)
     {
-        var normalized = JsonStateStore.NormalizeThumbprint(thumbprint);
+        ArgumentNullException.ThrowIfNull(thumbprint);
+        ArgumentNullException.ThrowIfNull(state);
+
+        if (!TryNormalizeThumbprint(thumbprint, out var normalized))
+        {
+            return;
+        }
+
         if (state.TryGetValue(normalized, out var record) &&
             record.State == CertificateNotificationState.Dismissed)
         {
@@ -129,6 +159,12 @@ public sealed class ExpiryEvaluator
         RefreshRecord(created, certificate);
         state[thumbprint] = created;
         return created;
+    }
+
+    private static bool TryNormalizeThumbprint(string thumbprint, out string normalized)
+    {
+        normalized = JsonStateStore.NormalizeThumbprint(thumbprint);
+        return !string.IsNullOrWhiteSpace(normalized);
     }
 
     private static void RefreshRecord(CertificateStateRecord record, CertificateSnapshot certificate)

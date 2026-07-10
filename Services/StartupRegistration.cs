@@ -25,28 +25,33 @@ public sealed class StartupRegistration
     /// exe (importante apos atualizacao da versao, quando o caminho fisico muda).
     /// </para>
     /// </summary>
-    public void EnsureRegistered()
+    public bool EnsureRegistered()
     {
         // Pre-check: se ambos caminhos ja estao registrados E apontam para o exe atual,
         // nao precisa fazer nada. Reduz overhead a cada startup do app.
         var status = QueryStatus();
         if (status.TaskSchedulerRegistered &&
-            status.TaskSchedulerCommand?.Contains(status.ResolvedExecutablePath, StringComparison.OrdinalIgnoreCase) == true)
+            IsCommandForExecutable(status.TaskSchedulerCommand, status.ResolvedExecutablePath))
         {
+            RemoveFromRegistry();
             _logger.Info($"Startup already registered via Task Scheduler at {status.ResolvedExecutablePath}");
-            return;
+            return true;
         }
 
         if (!TryRegisterWithTaskScheduler())
         {
-            RegisterWithRegistry();
+            return RegisterWithRegistry();
         }
+
+        RemoveFromRegistry();
+        return true;
     }
 
-    public void Remove()
+    public bool Remove()
     {
-        RemoveFromTaskScheduler();
-        RemoveFromRegistry();
+        var taskRemoved = RemoveFromTaskScheduler();
+        var registryRemoved = RemoveFromRegistry();
+        return taskRemoved && registryRemoved;
     }
 
     /// <summary>
@@ -59,7 +64,15 @@ public sealed class StartupRegistration
         string? RegistryCommand,
         string ResolvedExecutablePath)
     {
-        public bool IsRegistered => TaskSchedulerRegistered || RegistryRegistered;
+        public bool TaskSchedulerMatchesCurrentExecutable =>
+            TaskSchedulerRegistered &&
+            IsCommandForExecutable(TaskSchedulerCommand, ResolvedExecutablePath);
+
+        public bool RegistryMatchesCurrentExecutable =>
+            RegistryRegistered &&
+            IsCommandForExecutable(RegistryCommand, ResolvedExecutablePath);
+
+        public bool IsRegistered => TaskSchedulerMatchesCurrentExecutable || RegistryMatchesCurrentExecutable;
     }
 
     /// <summary>
@@ -106,10 +119,7 @@ public sealed class StartupRegistration
             var stdout = stdoutTask.GetAwaiter().GetResult();
             if (process.ExitCode != 0 || string.IsNullOrWhiteSpace(stdout)) return null;
 
-            // CSV com header na linha 1 e dados na linha 2; coluna "Task To Run" contem o comando.
-            // Procura por aspas que envolvem o caminho do executavel.
-            var lines = stdout.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-            return lines.Length >= 2 ? lines[1] : null;
+            return ExtractTaskSchedulerCommand(stdout);
         }
         catch
         {
@@ -142,13 +152,7 @@ public sealed class StartupRegistration
 
             // schtasks /create cria ou sobrescreve (/f) uma tarefa ONLOGON
             // com privilegios normais (/rl LIMITED), sem elevacao.
-            var args = string.Join(" ",
-                "/create",
-                $"/tn \"{TaskName}\"",
-                $"/tr \"\\\"{exePath}\\\" --background\"",
-                "/sc ONLOGON",
-                "/rl LIMITED",
-                "/f");
+            var args = BuildCreateTaskArguments(exePath);
 
             using var process = Process.Start(new ProcessStartInfo
             {
@@ -207,10 +211,15 @@ public sealed class StartupRegistration
     private static string ResolveExecutablePath() =>
         Environment.ProcessPath ?? Application.ExecutablePath;
 
-    private void RemoveFromTaskScheduler()
+    private bool RemoveFromTaskScheduler()
     {
         try
         {
+            if (QueryTaskSchedulerCommand() is null)
+            {
+                return true;
+            }
+
             using var process = Process.Start(new ProcessStartInfo
             {
                 FileName               = "schtasks.exe",
@@ -222,7 +231,7 @@ public sealed class StartupRegistration
                 RedirectStandardError  = true
             });
 
-            if (process is null) return;
+            if (process is null) return false;
 
             // Drena ambos os streams antes do WaitForExit (vide TryRegisterWithTaskScheduler).
             var stdoutTask = process.StandardOutput.ReadToEndAsync();
@@ -230,13 +239,23 @@ public sealed class StartupRegistration
             if (!process.WaitForExit(5_000))
             {
                 try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
+                return false;
             }
             _ = stdoutTask.GetAwaiter().GetResult();
-            _ = stderrTask.GetAwaiter().GetResult();
+            var stderr = stderrTask.GetAwaiter().GetResult()?.Trim();
+            if (process.ExitCode == 0)
+            {
+                return true;
+            }
+
+            var detail = string.IsNullOrEmpty(stderr) ? string.Empty : $": {stderr}";
+            _logger.Error(new InvalidOperationException($"schtasks delete failed with exit code {process.ExitCode}{detail}"), "Failed to remove Task Scheduler entry");
+            return false;
         }
         catch (Exception ex)
         {
             _logger.Error(ex, "Failed to remove Task Scheduler entry");
+            return false;
         }
     }
 
@@ -244,7 +263,7 @@ public sealed class StartupRegistration
     // HKCU\Run (fallback)
     // -------------------------------------------------------------------------
 
-    private void RegisterWithRegistry()
+    private bool RegisterWithRegistry()
     {
         try
         {
@@ -252,25 +271,41 @@ public sealed class StartupRegistration
                          ?? Registry.CurrentUser.CreateSubKey(RunKeyPath, writable: true);
 
             var executable = ResolveExecutablePath();
-            key.SetValue(ValueName, $"\"{executable}\" --background", RegistryValueKind.String);
+            key.SetValue(ValueName, BuildRegistryCommand(executable), RegistryValueKind.String);
             _logger.Info("Startup registered via registry HKCU\\Run");
+            return true;
         }
         catch (Exception ex)
         {
             _logger.Error(ex, "Failed to register startup via registry");
+            return false;
         }
     }
 
-    private void RemoveFromRegistry()
+    private bool RemoveFromRegistry()
     {
         try
         {
             using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: true);
             key?.DeleteValue(ValueName, throwOnMissingValue: false);
+            return true;
         }
         catch (Exception ex)
         {
             _logger.Error(ex, "Failed to remove startup from registry");
+            return false;
         }
     }
+
+    internal static string BuildCreateTaskArguments(string executablePath)
+        => StartupRegistrationCommandBuilder.BuildCreateTaskArguments(executablePath);
+
+    internal static string BuildRegistryCommand(string executablePath)
+        => StartupRegistrationCommandBuilder.BuildRegistryCommand(executablePath);
+
+    internal static string? ExtractTaskSchedulerCommand(string stdout)
+        => StartupRegistrationCommandBuilder.ExtractTaskSchedulerCommand(stdout);
+
+    internal static bool IsCommandForExecutable(string? command, string executablePath)
+        => StartupRegistrationCommandBuilder.IsCommandForExecutable(command, executablePath);
 }

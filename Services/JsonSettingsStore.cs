@@ -67,6 +67,22 @@ public sealed class JsonSettingsStore
             var json = File.ReadAllText(_paths.SettingsPath);
             return DeserializeSettings(json);
         }
+        catch (JsonException ex)
+        {
+            _logger.Error(ex, "Failed to read settings");
+            PreserveCorruptFile(_paths.SettingsPath);
+            return new AppSettings();
+        }
+        catch (IOException ex)
+        {
+            _logger.Error(ex, "Transient IO error while reading settings");
+            return new AppSettings();
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            _logger.Error(ex, "Transient access error while reading settings");
+            return new AppSettings();
+        }
         catch (Exception ex)
         {
             _logger.Error(ex, "Failed to read settings");
@@ -97,30 +113,31 @@ public sealed class JsonSettingsStore
             return new AppSettings();
         }
 
-        // Detecta envelope v1+ procurando "version" case-INSENSITIVE
-        // (JsonDocument.TryGetProperty e case-sensitive por default).
-        var isEnvelope = false;
+        // Detecta envelope v1+ procurando "settings" case-insensitive.
+        // "version" pode vir ausente/string por edicao manual, mas o bloco
+        // de settings ainda e aproveitavel e deve prevalecer sobre o parser legado.
+        JsonElement? settingsElement = null;
         foreach (var property in root.EnumerateObject())
         {
-            if (string.Equals(property.Name, "version", StringComparison.OrdinalIgnoreCase) &&
-                property.Value.ValueKind == JsonValueKind.Number)
+            if (string.Equals(property.Name, "settings", StringComparison.OrdinalIgnoreCase))
             {
-                isEnvelope = true;
+                settingsElement = property.Value;
                 break;
             }
         }
 
-        if (isEnvelope)
+        if (settingsElement is { } settings)
         {
-            var envelope = JsonSerializer.Deserialize<SettingsFileEnvelope>(json, JsonOptions);
-            return envelope?.Settings ?? new AppSettings();
+            return settings.ValueKind == JsonValueKind.Null
+                ? new AppSettings()
+                : settings.Deserialize<AppSettings>(JsonOptions) ?? new AppSettings();
         }
 
         // Formato legado: AppSettings serializado diretamente.
         return JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? new AppSettings();
     }
 
-    public void Save(AppSettings settings)
+    public bool Save(AppSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
@@ -131,16 +148,18 @@ public sealed class JsonSettingsStore
             if (!hasLock)
             {
                 _logger.Error(new TimeoutException("Settings file lock timeout"), "Failed to acquire settings file lock");
-                return;
+                return false;
             }
 
             var envelope = new SettingsFileEnvelope { Version = CurrentSettingsVersion, Settings = settings };
             var json = JsonSerializer.Serialize(envelope, JsonOptions);
             AtomicWrite(_paths.SettingsPath, json);
+            return true;
         }
         catch (Exception ex)
         {
             _logger.Error(ex, "Failed to save settings");
+            return false;
         }
         finally
         {
@@ -153,6 +172,7 @@ public sealed class JsonSettingsStore
 
     private static void AtomicWrite(string path, string content)
     {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var tempPath = $"{path}.{Guid.NewGuid():N}.tmp";
         var backupPath = $"{path}.bak";
 
@@ -207,8 +227,8 @@ public sealed class JsonSettingsStore
                 return;
             }
 
-            var corruptPath = $"{path}.corrupt-{DateTimeOffset.Now:yyyyMMddHHmmss}";
-            File.Move(path, corruptPath, overwrite: true);
+            var corruptPath = $"{path}.corrupt-{DateTimeOffset.Now:yyyyMMddHHmmss}-{Guid.NewGuid():N}";
+            File.Move(path, corruptPath);
         }
         catch (Exception ex)
         {

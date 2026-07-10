@@ -46,15 +46,25 @@ public sealed class FileLogger
     {
         try
         {
+            var redactedMessage = DiagnosticRedactor.RedactText(message);
+            var redactedException = exception is null
+                ? null
+                : new RedactedExceptionView(
+                    exception.GetType().FullName ?? string.Empty,
+                    DiagnosticRedactor.RedactText(exception.Message),
+                    DiagnosticRedactor.RedactText(exception.StackTrace ?? string.Empty),
+                    DiagnosticRedactor.RedactText(exception.ToString()));
+
             lock (_gate)
             {
+                Directory.CreateDirectory(_paths.RootDirectory);
                 // Rotacao nao-fatal: se falhar (arquivo bloqueado por antivirus, etc.),
                 // ainda tentamos persistir o log — o arquivo apenas cresce alem do limite.
                 try { RotateIfNeeded(); } catch { /* preferimos perder o cap a perder o log */ }
 
                 var line = Format == LogFormat.Json
-                    ? FormatJson(level, message, exception)
-                    : FormatText(level, message, exception);
+                    ? FormatJson(level, redactedMessage, redactedException)
+                    : FormatText(level, redactedMessage, redactedException);
 
                 File.AppendAllText(_paths.LogPath, line + Environment.NewLine);
             }
@@ -65,13 +75,13 @@ public sealed class FileLogger
         }
     }
 
-    private static string FormatText(string level, string message, Exception? exception)
+    private static string FormatText(string level, string message, RedactedExceptionView? exception)
     {
-        var body = exception is null ? message : $"{message}:{Environment.NewLine}{exception}";
+        var body = exception is null ? message : $"{message}:{Environment.NewLine}{exception.FullText}";
         return $"{DateTimeOffset.Now:O} [{level}] {body}";
     }
 
-    private static string FormatJson(string level, string message, Exception? exception)
+    private static string FormatJson(string level, string message, RedactedExceptionView? exception)
     {
         // Linha JSON unica (JSONL — facil de ingerir em SIEM).
         // Campos minimos: ts (ISO-8601), level, message, exception (opcional).
@@ -84,9 +94,10 @@ public sealed class FileLogger
             writer.WriteString("message", message);
             if (exception is not null)
             {
-                writer.WriteString("exceptionType", exception.GetType().FullName ?? "");
+                writer.WriteString("exceptionType", exception.TypeName);
                 writer.WriteString("exceptionMessage", exception.Message);
-                writer.WriteString("stackTrace", exception.StackTrace ?? "");
+                writer.WriteString("stackTrace", exception.StackTrace);
+                writer.WriteString("exception", exception.FullText);
             }
             writer.WriteEndObject();
         }
@@ -132,7 +143,9 @@ public sealed class FileLogger
                 sourceToUse = "Application";
             }
 
-            var body = $"[CertExpiryMonitor] {message}{Environment.NewLine}{exception}";
+            var body =
+                $"[CertExpiryMonitor] {DiagnosticRedactor.RedactText(message)}" +
+                $"{Environment.NewLine}{DiagnosticRedactor.RedactText(exception.ToString())}";
             EventLog.WriteEntry(sourceToUse, body, EventLogEntryType.Error, eventID: 1000);
         }
         catch
@@ -164,4 +177,10 @@ public sealed class FileLogger
             File.Move(src, dest);
         }
     }
+
+    private sealed record RedactedExceptionView(
+        string TypeName,
+        string Message,
+        string StackTrace,
+        string FullText);
 }

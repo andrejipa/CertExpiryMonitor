@@ -1,3 +1,4 @@
+using System.Formats.Asn1;
 using System.Security.Cryptography.X509Certificates;
 using CertExpiryMonitor.Models;
 
@@ -16,6 +17,9 @@ namespace CertExpiryMonitor.Services;
 /// </remarks>
 public class CertificateReader
 {
+    private const string CertificatePoliciesOid = "2.5.29.32";
+    private const string IcpBrasilA1PolicyPrefix = "2.16.76.1.2.1.";
+
     private readonly FileLogger _logger;
 
     public CertificateReader(FileLogger logger)
@@ -69,6 +73,8 @@ public class CertificateReader
 
     public bool RemoveFromCurrentUserPersonalStore(string thumbprint)
     {
+        ArgumentNullException.ThrowIfNull(thumbprint);
+
         var normalizedThumbprint = JsonStateStore.NormalizeThumbprint(thumbprint);
 
         try
@@ -103,9 +109,12 @@ public class CertificateReader
 
     public static CertificateSnapshot? TryCreateSnapshot(X509Certificate2 certificate)
     {
+        ArgumentNullException.ThrowIfNull(certificate);
+
         if (!certificate.HasPrivateKey ||
             string.IsNullOrWhiteSpace(certificate.Thumbprint) ||
-            certificate.NotAfter == DateTime.MinValue)
+            certificate.NotAfter == DateTime.MinValue ||
+            !HasIcpBrasilA1Policy(certificate))
         {
             return null;
         }
@@ -120,5 +129,53 @@ public class CertificateReader
             certificate.NotAfter,
             certificate.SerialNumber ?? string.Empty,
             simpleName);
+    }
+
+    internal static bool HasIcpBrasilA1Policy(X509Certificate2 certificate)
+    {
+        ArgumentNullException.ThrowIfNull(certificate);
+
+        foreach (var extension in certificate.Extensions)
+        {
+            if (!string.Equals(extension.Oid?.Value, CertificatePoliciesOid, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (ContainsIcpBrasilA1Policy(extension.RawData))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsIcpBrasilA1Policy(byte[] rawData)
+    {
+        try
+        {
+            var reader = new AsnReader(rawData, AsnEncodingRules.DER);
+            var policies = reader.ReadSequence();
+            while (policies.HasData)
+            {
+                var policyInfo = policies.ReadSequence();
+                var policyOid = policyInfo.ReadObjectIdentifier();
+                if (policyOid.StartsWith(IcpBrasilA1PolicyPrefix, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+        }
+        catch (AsnContentException)
+        {
+            return false;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+
+        return false;
     }
 }

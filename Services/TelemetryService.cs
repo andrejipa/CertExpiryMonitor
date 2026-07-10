@@ -16,6 +16,7 @@ namespace CertExpiryMonitor.Services;
 public sealed class TelemetryService
 {
     private const int CurrentVersion = 1;
+    private const long MaxTelemetryBytes = 1_048_576;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.General)
     {
         WriteIndented = true,
@@ -45,9 +46,9 @@ public sealed class TelemetryService
         public long ChecksWithPlan { get; set; }
         /// <summary>Verificacoes puladas por horario/hash igual.</summary>
         public long ChecksSkipped { get; set; }
-        /// <summary>Toast notifications efetivamente exibidas.</summary>
+        /// <summary>Avisos de notificacao efetivamente exibidos.</summary>
         public long NotificationsShown { get; set; }
-        /// <summary>Erros de notificacao (toast falhou + fallback balloon).</summary>
+        /// <summary>Erros de notificacao (toast e popup proprio falharam).</summary>
         public long NotificationFailures { get; set; }
         /// <summary>Cliques em "Nao lembrar este" do usuario.</summary>
         public long DismissOne { get; set; }
@@ -99,6 +100,17 @@ public sealed class TelemetryService
             return true;  // primeiro Increment cria o arquivo
         }
 
+        var info = new FileInfo(_paths.TelemetryPath);
+        if (info.Length > MaxTelemetryBytes)
+        {
+            _logger.Error(
+                new InvalidDataException($"telemetry.json too large ({info.Length} bytes); ignoring"),
+                "Telemetry file exceeded size guard");
+            PreserveCorruptFile();
+            reason = "corrupt";
+            return false;
+        }
+
         string json;
         try
         {
@@ -113,19 +125,10 @@ public sealed class TelemetryService
             return false;
         }
 
-        try
+        if (TryDeserializeEnvelope(json, out var loaded))
         {
-            var loaded = JsonSerializer.Deserialize<TelemetryEnvelope>(json, JsonOptions);
-            if (loaded is not null)
-            {
-                envelope = loaded;
-                return true;
-            }
-            // null deserializacao (raro) — trata como corrompido
-        }
-        catch (Exception)
-        {
-            // Vai cair no caminho de corrupcao abaixo
+            envelope = loaded;
+            return true;
         }
 
         // Corrompido: preserva o arquivo atual para diagnostico antes de qualquer
@@ -135,13 +138,112 @@ public sealed class TelemetryService
         return false;
     }
 
+    private static bool TryDeserializeEnvelope(string json, out TelemetryEnvelope envelope)
+    {
+        try
+        {
+            envelope = JsonSerializer.Deserialize<TelemetryEnvelope>(json, JsonOptions) ?? new TelemetryEnvelope();
+            return true;
+        }
+        catch (JsonException)
+        {
+            // Cai para parser tolerante abaixo. O caso observado em stress e
+            // edicao manual de "version" como string, sem dano aos contadores.
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                envelope = new TelemetryEnvelope();
+                return false;
+            }
+
+            var root = document.RootElement;
+            envelope = new TelemetryEnvelope
+            {
+                Version = ReadInt32(root, "version", CurrentVersion),
+                CreatedAt = ReadDateTime(root, "createdAt", DateTime.UtcNow),
+                UpdatedAt = ReadDateTime(root, "updatedAt", DateTime.UtcNow),
+                TotalChecks = ReadInt64(root, "totalChecks"),
+                ChecksWithPlan = ReadInt64(root, "checksWithPlan"),
+                ChecksSkipped = ReadInt64(root, "checksSkipped"),
+                NotificationsShown = ReadInt64(root, "notificationsShown"),
+                NotificationFailures = ReadInt64(root, "notificationFailures"),
+                DismissOne = ReadInt64(root, "dismissOne"),
+                DismissAll = ReadInt64(root, "dismissAll"),
+                Restore = ReadInt64(root, "restore"),
+                ManualChecks = ReadInt64(root, "manualChecks"),
+                ThresholdsChanged = ReadInt64(root, "thresholdsChanged"),
+                ScheduleChanged = ReadInt64(root, "scheduleChanged")
+            };
+            return true;
+        }
+        catch (JsonException)
+        {
+            envelope = new TelemetryEnvelope();
+            return false;
+        }
+    }
+
+    private static long ReadInt64(JsonElement root, string propertyName, long fallback = 0)
+    {
+        foreach (var property in root.EnumerateObject())
+        {
+            if (!string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (property.Value.ValueKind == JsonValueKind.Number && property.Value.TryGetInt64(out var value))
+            {
+                return value;
+            }
+
+            if (property.Value.ValueKind == JsonValueKind.String &&
+                long.TryParse(property.Value.GetString(), out value))
+            {
+                return value;
+            }
+
+            return fallback;
+        }
+
+        return fallback;
+    }
+
+    private static int ReadInt32(JsonElement root, string propertyName, int fallback)
+    {
+        var value = ReadInt64(root, propertyName, fallback);
+        return value is >= int.MinValue and <= int.MaxValue ? (int)value : fallback;
+    }
+
+    private static DateTime ReadDateTime(JsonElement root, string propertyName, DateTime fallback)
+    {
+        foreach (var property in root.EnumerateObject())
+        {
+            if (!string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            return property.Value.ValueKind == JsonValueKind.String &&
+                   property.Value.TryGetDateTime(out var value)
+                ? value
+                : fallback;
+        }
+
+        return fallback;
+    }
+
     private void PreserveCorruptFile()
     {
         try
         {
             if (!File.Exists(_paths.TelemetryPath)) return;
-            var corruptPath = $"{_paths.TelemetryPath}.corrupt-{DateTimeOffset.Now:yyyyMMddHHmmss}";
-            File.Move(_paths.TelemetryPath, corruptPath, overwrite: true);
+            var corruptPath = $"{_paths.TelemetryPath}.corrupt-{DateTimeOffset.Now:yyyyMMddHHmmss}-{Guid.NewGuid():N}";
+            File.Move(_paths.TelemetryPath, corruptPath);
             _logger.Info($"Telemetry file was corrupt; preserved at {corruptPath}");
         }
         catch (Exception ex)
@@ -172,6 +274,7 @@ public sealed class TelemetryService
                 mutator(env);
                 env.UpdatedAt = DateTime.UtcNow;
                 var json = JsonSerializer.Serialize(env, JsonOptions);
+                Directory.CreateDirectory(_paths.RootDirectory);
                 // WriteAllText nao e atomico em sentido estrito, mas Telemetry
                 // nao e critica — last-write-wins em caso de race e aceitavel.
                 File.WriteAllText(_paths.TelemetryPath, json);

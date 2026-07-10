@@ -17,12 +17,11 @@ public sealed class DetailsFormOptions
     public required TimeSpan NotificationTime { get; init; }
     public required bool NotificationSoundEnabled { get; init; }
     public required ExpiryThresholds Thresholds { get; init; }
-    public required Action<string> DismissCertificate { get; init; }
-    public required Action<string> RestoreCertificate { get; init; }
-    public required Func<string, bool> RemoveExpiredCertificate { get; init; }
-    public required Action<TimeSpan> SaveNotificationTime { get; init; }
-    public required Action<bool> SaveNotificationSound { get; init; }
-    public required Action<ExpiryThresholds> SaveThresholds { get; init; }
+    public required Func<string, bool> DismissCertificate { get; init; }
+    public required Func<string, bool> RestoreCertificate { get; init; }
+    public required Func<string, bool> RemoveCertificate { get; init; }
+    public required Action OpenWindowsCertificateStore { get; init; }
+    public required Func<DetailsSettingsUpdate, bool> SaveSettings { get; init; }
     public required Func<ExpiryThresholds> GetThresholds { get; init; }
     public required Func<bool> TestNotificationNow { get; init; }
     public required Func<(IReadOnlyList<CertificateSnapshot>, IReadOnlyDictionary<string, CertificateStateRecord>)> ReloadCertificates { get; init; }
@@ -33,8 +32,15 @@ public sealed class DetailsFormOptions
     public required LogFormat LogFormat { get; init; }
     public required bool EventLogEnabled { get; init; }
     public required bool TelemetryEnabled { get; init; }
-    public required Action<LogFormat, bool, bool> SaveAdvancedSettings { get; init; }
 }
+
+public sealed record DetailsSettingsUpdate(
+    TimeSpan NotificationTime,
+    bool NotificationSoundEnabled,
+    ExpiryThresholds Thresholds,
+    LogFormat LogFormat,
+    bool EventLogEnabled,
+    bool TelemetryEnabled);
 
 // ---------------------------------------------------------------------------
 // Form
@@ -42,16 +48,34 @@ public sealed class DetailsFormOptions
 
 public sealed class DetailsForm : Form
 {
+    internal const int SummaryPanelTopPadding = 10;
+    internal const int SummaryPanelBottomPadding = 8;
+    internal const int SummaryCardsHeight = 50;
+    internal const int SummaryControlsTopGap = 6;
+    internal const int SummaryControlsHeight = 36;
+    internal const int SummaryPanelHeight = SummaryPanelTopPadding
+                                          + SummaryCardsHeight
+                                          + SummaryControlsTopGap
+                                          + SummaryControlsHeight
+                                          + SummaryPanelBottomPadding
+                                          + 2;
+    internal const int MinimumClientWidth = 560;
+    internal const int MinimumClientHeight = 420;
+
     private readonly TabControl _tabs;
     private readonly TabPage _certificatesTab;
     private readonly TabPage _settingsTab;
 
     public DetailsForm(DetailsFormOptions options)
     {
+        var workingArea = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1024, 768);
+
         Text            = "Certificados A1 monitorados";
         StartPosition   = FormStartPosition.CenterScreen;
-        ClientSize      = new Size(940, 600);  // +100 px do GroupBox "Avançado" na aba Configurações
-        MinimumSize     = new Size(780, 520);
+        MinimumSize     = new Size(580, 450);
+        ClientSize      = new Size(
+            Math.Min(940, Math.Max(MinimumClientWidth, workingArea.Width - 40)),
+            Math.Min(600, Math.Max(MinimumClientHeight, workingArea.Height - 80)));
         Icon            = AppIcon.Current;     // icone proprio na barra de titulo e Alt+Tab
 
         var table = CreateCertificateTable();
@@ -121,7 +145,7 @@ public sealed class DetailsForm : Form
             AllowUserToDeleteRows     = false,
             AutoSizeColumnsMode       = DataGridViewAutoSizeColumnsMode.Fill,
             SelectionMode             = DataGridViewSelectionMode.FullRowSelect,
-            MultiSelect               = false,
+            MultiSelect               = true,
             AutoGenerateColumns       = false,
             BackgroundColor           = Color.White,
             BorderStyle               = BorderStyle.None,
@@ -171,7 +195,8 @@ public sealed class DetailsForm : Form
             Text        = FormatCountLabel(count),
             Dock        = DockStyle.Fill,
             TextAlign   = ContentAlignment.MiddleLeft,
-            Padding     = new Padding(12, 0, 0, 0)
+            Padding     = new Padding(12, 0, 0, 0),
+            AutoEllipsis = true
         };
     }
 
@@ -185,6 +210,32 @@ public sealed class DetailsForm : Form
         _ => $"{count} certificados encontrados no usuário atual."
     };
 
+    internal static bool TryParseDailyTime(string? text, out TimeSpan time)
+    {
+        time = default;
+        if (string.IsNullOrWhiteSpace(text)) return false;
+
+        var parts = text.Trim().Split(':');
+        if (parts.Length != 2) return false;
+        if (!int.TryParse(parts[0], out var hours)) return false;
+        if (!int.TryParse(parts[1], out var minutes)) return false;
+        if (hours is < 0 or > 23) return false;
+        if (minutes is < 0 or > 59) return false;
+
+        time = new TimeSpan(hours, minutes, 0);
+        return true;
+    }
+
+    internal static string FormatDailyTime(TimeSpan time)
+    {
+        if (time < TimeSpan.Zero || time >= TimeSpan.FromDays(1))
+        {
+            time = TimeSpan.FromHours(9);
+        }
+
+        return $"{(int)time.TotalHours:00}:{time.Minutes:00}";
+    }
+
     private Panel BuildBottomPanel(
         DataGridView grid,
         DataTable table,
@@ -193,18 +244,22 @@ public sealed class DetailsForm : Form
         Label status,
         DetailsFormOptions options)
     {
-        var dismiss = new Button { Text = "Ignorar certificado", Anchor = AnchorStyles.Right | AnchorStyles.Top, Width = 150, Height = 32, Location = new Point(0, 6) };
-        var analyze = new Button { Text = "Atualizar lista",     Anchor = AnchorStyles.Right | AnchorStyles.Top, Width = 120, Height = 32, Location = new Point(0, 6) };
-        var close   = new Button { Text = "Fechar",              Anchor = AnchorStyles.Right | AnchorStyles.Top, Width = 90,  Height = 32, Location = new Point(0, 6) };
+        var dismiss = new Button { Text = "Ignorar",   Anchor = AnchorStyles.Right | AnchorStyles.Top, Width = 90,  Height = 32, Location = new Point(0, 6) };
+        var remove  = new Button { Text = "Remover",   Anchor = AnchorStyles.Right | AnchorStyles.Top, Width = 95,  Height = 32, Location = new Point(0, 6) };
+        var analyze = new Button { Text = "Atualizar", Anchor = AnchorStyles.Right | AnchorStyles.Top, Width = 95,  Height = 32, Location = new Point(0, 6) };
+        var close   = new Button { Text = "Fechar",    Anchor = AnchorStyles.Right | AnchorStyles.Top, Width = 80,  Height = 32, Location = new Point(0, 6) };
 
         var toolTip = new ToolTip();
         toolTip.SetToolTip(analyze, "Releia os certificados instalados e atualiza esta tela. As notificações seguem a verificação diária.");
         toolTip.SetToolTip(dismiss, "Selecione um certificado na lista para ignorá-lo (ou para voltar a lembrar dele).");
+        toolTip.SetToolTip(remove,  "Remove do repositório do usuário atual os certificados selecionados. Use com cuidado: certificados válidos podem ser necessários para assinatura.");
         toolTip.SetToolTip(close,   "Fechar esta janela. O monitor continua rodando em segundo plano na bandeja.");
 
         // Acessibilidade (UIA / leitores de tela): nome descritivo independente do Text.
         dismiss.AccessibleName        = "Ignorar ou restaurar o certificado selecionado";
         dismiss.AccessibleDescription = "Marca o certificado para nao notificar mais, ou reverte a marcacao.";
+        remove.AccessibleName         = "Remover certificados selecionados";
+        remove.AccessibleDescription  = "Remove do repositorio de certificados do usuario atual os certificados selecionados.";
         analyze.AccessibleName        = "Atualizar lista de certificados";
         close.AccessibleName          = "Fechar janela de detalhes";
         grid.AccessibleName           = "Lista de certificados A1 do usuario atual";
@@ -212,22 +267,28 @@ public sealed class DetailsForm : Form
 
         close.Click += (_, _) => Close();
 
-        grid.SelectionChanged += (_, _) => UpdateDismissButtonText(grid, dismiss);
+        grid.SelectionChanged += (_, _) =>
+        {
+            UpdateDismissButtonText(grid, dismiss);
+            UpdateRemoveButtonText(grid, remove);
+        };
         Shown += (_, _) =>
         {
             grid.ClearSelection();
             grid.CurrentCell = null;
             UpdateDismissButtonText(grid, dismiss);
+            UpdateRemoveButtonText(grid, remove);
         };
 
         WireDismissButton(dismiss, grid, table, summaryPanel, options);
-        WireRemoveExpiredMenuItem(grid, table, summaryPanel, status, options);
+        WireRemoveButton(remove, grid, table, summaryPanel, status, options);
+        WireRemoveContextMenu(grid, table, summaryPanel, status, options);
         WireAnalyzeButton(analyze, grid, table, view, summaryPanel, status, options);
 
         var buttonPanel = new FlowLayoutPanel
         {
             Dock          = DockStyle.Right,
-            Width         = 390,
+            Width         = 410,
             FlowDirection = FlowDirection.RightToLeft,
             WrapContents  = false,
             Padding       = new Padding(0),
@@ -235,9 +296,10 @@ public sealed class DetailsForm : Form
         };
         // FlowDirection=RightToLeft: o PRIMEIRO Add fica mais a direita.
         // Convencao Windows: acao primaria/Fechar mais isolada a direita; demais a esquerda.
-        // Resultado visual: [Atualizar lista]  [Ignorar certificado]  [Fechar]
+        // Resultado visual: [Atualizar] [Remover] [Ignorar] [Fechar]
         buttonPanel.Controls.Add(close);    // direita (rightmost)
         buttonPanel.Controls.Add(dismiss);  // meio
+        buttonPanel.Controls.Add(remove);
         buttonPanel.Controls.Add(analyze);  // esquerda
 
         var bottom = new Panel
@@ -273,8 +335,14 @@ public sealed class DetailsForm : Form
                 var isDismissed = rowView?.Row.Field<bool>("Dismissed") == true;
                 var daysRemaining = rowView?.Row.Field<int>("Days") ?? 9999;
 
-                if (isDismissed) options.RestoreCertificate(thumbprint);
-                else             options.DismissCertificate(thumbprint);
+                var saved = isDismissed
+                    ? options.RestoreCertificate(thumbprint)
+                    : options.DismissCertificate(thumbprint);
+                if (!saved)
+                {
+                    MessageBox.Show("Não foi possível salvar a alteração. Tente novamente.", "CertExpiryMonitor", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
 
                 if (rowView is not null)
                 {
@@ -299,84 +367,146 @@ public sealed class DetailsForm : Form
         };
     }
 
-    private void WireRemoveExpiredMenuItem(
+    private void WireRemoveButton(
+        Button remove,
         DataGridView grid,
         DataTable table,
         Panel summaryPanel,
         Label status,
         DetailsFormOptions options)
     {
-        var contextMenu      = new ContextMenuStrip();
-        var removeExpiredItem = new ToolStripMenuItem("Remover certificado vencido");
-        contextMenu.Items.Add(removeExpiredItem);
+        remove.Click += (_, _) => RemoveSelectedCertificates(grid, table, summaryPanel, status, options);
+    }
+
+    private void WireRemoveContextMenu(
+        DataGridView grid,
+        DataTable table,
+        Panel summaryPanel,
+        Label status,
+        DetailsFormOptions options)
+    {
+        var contextMenu = new ContextMenuStrip();
+        var removeItem = new ToolStripMenuItem("Remover selecionado(s)");
+        var openStoreItem = new ToolStripMenuItem("Abrir certificados do Windows");
+        contextMenu.Items.Add(removeItem);
+        contextMenu.Items.Add(new ToolStripSeparator());
+        contextMenu.Items.Add(openStoreItem);
         grid.ContextMenuStrip = contextMenu;
 
         grid.CellMouseDown += (_, e) =>
         {
             if (e.Button != MouseButtons.Right) return;
             if (e.RowIndex < 0) { grid.ClearSelection(); grid.CurrentCell = null; return; }
-            grid.ClearSelection();
+
+            if (!grid.Rows[e.RowIndex].Selected)
+            {
+                grid.ClearSelection();
+            }
+
             grid.Rows[e.RowIndex].Selected = true;
             grid.CurrentCell = grid.Rows[e.RowIndex].Cells["Holder"];
         };
 
         contextMenu.Opening += (_, e) =>
         {
-            // Defensa contra right-click no header ou em area vazia da grid:
-            // sem linha selecionada NUNCA mostrar menu de contexto. Hoje o
-            // unico item depende de StatusCategory='Expired', mas qualquer
-            // item futuro herda essa proteção.
-            if (grid.SelectedRows.Count == 0)
-            {
-                e.Cancel = true;
-                return;
-            }
-
-            var hasExpired = TryGetSelectedRowView(grid, out var rv) &&
-                             rv.Row.Field<string>("StatusCategory") == "Expired";
-            removeExpiredItem.Enabled = hasExpired;
-            e.Cancel = !hasExpired;
+            removeItem.Enabled = grid.SelectedRows.Count > 0;
+            removeItem.Text = grid.SelectedRows.Count == 1
+                ? "Remover certificado selecionado"
+                : $"Remover {grid.SelectedRows.Count} certificados selecionados";
         };
 
-        removeExpiredItem.Click += (_, _) =>
+        removeItem.Click += (_, _) => RemoveSelectedCertificates(grid, table, summaryPanel, status, options);
+        openStoreItem.Click += (_, _) =>
         {
             try
             {
-                if (!TryGetSelectedRowView(grid, out var rowView)) return;
-                if (rowView.Row.Field<string>("StatusCategory") != "Expired") return;
-
-                var holder     = rowView.Row.Field<string>("Holder") ?? "certificado";
-                var thumbprint = rowView.Row.Field<string>("Thumbprint");
-                if (string.IsNullOrWhiteSpace(thumbprint)) return;
-
-                var confirm = MessageBox.Show(
-                    $"Remover o certificado vencido de {holder} do repositório do usuário atual?",
-                    "Remover certificado vencido",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Warning,
-                    MessageBoxDefaultButton.Button2);
-
-                if (confirm != DialogResult.Yes) return;
-
-                if (!options.RemoveExpiredCertificate(thumbprint))
-                {
-                    MessageBox.Show("Não foi possível remover o certificado. Ele pode já ter sido removido ou estar bloqueado.", "CertExpiryMonitor", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
-                }
-
-                table.Rows.Remove(rowView.Row);
-                UpdateSummaryItems(summaryPanel, table);
-                status.Text = FormatCountLabel(table.Rows.Count);
-                grid.ClearSelection();
-                grid.CurrentCell = null;
-                ApplyRowStyles(grid);
+                options.OpenWindowsCertificateStore();
             }
             catch (Exception ex)
             {
-                options.Logger.Error(ex, "Failed to remove expired certificate from details window");
-                MessageBox.Show("Não foi possível remover o certificado. Tente novamente.", "CertExpiryMonitor", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                options.Logger.Error(ex, "Failed to open Windows certificate store from details context menu");
+                MessageBox.Show("Não foi possível abrir os certificados do Windows agora.", "CertExpiryMonitor", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         };
+    }
+
+    private void RemoveSelectedCertificates(
+        DataGridView grid,
+        DataTable table,
+        Panel summaryPanel,
+        Label status,
+        DetailsFormOptions options)
+    {
+        try
+        {
+            var rows = GetSelectedRowViews(grid).ToArray();
+            if (rows.Length == 0) return;
+
+            var validCount = rows.Count(row => row.Row.Field<int>("Days") >= 0);
+            var title = rows.Length == 1
+                ? "Remover certificado"
+                : "Remover certificados";
+            var holder = rows.Length == 1
+                ? rows[0].Row.Field<string>("Holder") ?? "certificado"
+                : $"{rows.Length} certificados";
+            var warning = validCount > 0
+                ? $"\r\n\r\nAtenção: {validCount} certificado(s) selecionado(s) ainda estão válidos e podem ser necessários para assinatura."
+                : string.Empty;
+
+            var confirm = MessageBox.Show(
+                $"Remover {holder} do repositório do usuário atual?{warning}",
+                title,
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2);
+
+            if (confirm != DialogResult.Yes) return;
+
+            var removed = 0;
+            var failed  = 0;
+
+            foreach (var rowView in rows)
+            {
+                var thumbprint = rowView.Row.Field<string>("Thumbprint");
+                if (string.IsNullOrWhiteSpace(thumbprint))
+                {
+                    failed++;
+                    continue;
+                }
+
+                if (options.RemoveCertificate(thumbprint))
+                {
+                    table.Rows.Remove(rowView.Row);
+                    removed++;
+                }
+                else
+                {
+                    failed++;
+                }
+            }
+
+            UpdateSummaryItems(summaryPanel, table);
+            status.Text = removed > 0
+                ? $"{FormatCountLabel(table.Rows.Count)} Removido(s): {removed}. Falha(s): {failed}."
+                : FormatCountLabel(table.Rows.Count);
+            grid.ClearSelection();
+            grid.CurrentCell = null;
+            ApplyRowStyles(grid);
+
+            if (failed > 0)
+            {
+                MessageBox.Show(
+                    $"Não foi possível remover {failed} certificado(s). Eles podem já ter sido removidos ou estar bloqueados.",
+                    "CertExpiryMonitor",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            options.Logger.Error(ex, "Failed to remove certificate from details window");
+            MessageBox.Show("Não foi possível remover o certificado. Tente novamente.", "CertExpiryMonitor", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
     }
 
     private static void WireAnalyzeButton(
@@ -448,16 +578,18 @@ public sealed class DetailsForm : Form
             TextAlign = ContentAlignment.MiddleLeft
         };
 
-        var timePicker = new DateTimePicker
+        var timeBox = new MaskedTextBox("00:00")
         {
-            Format         = DateTimePickerFormat.Custom,
-            CustomFormat   = "HH:mm",
-            ShowUpDown     = true,
-            Location       = new Point(135, 72),
-            Width          = 80,
-            Value          = DateTime.Today.Add(options.NotificationTime),
-            AccessibleName = "Horário do popup diário"
+            Location                = new Point(135, 72),
+            Width                   = 62,
+            Text                    = FormatDailyTime(options.NotificationTime),
+            PromptChar              = '0',
+            ResetOnPrompt           = false,
+            ResetOnSpace            = false,
+            AccessibleName          = "Horário do popup diário",
+            AccessibleDescription   = "Informe um horário de 00:00 até 23:59."
         };
+        tip.SetToolTip(timeBox, "Informe o horário no formato 24h, de 00:00 até 23:59.");
 
         var testPopup = new Button
         {
@@ -478,7 +610,7 @@ public sealed class DetailsForm : Form
         };
         tip.SetToolTip(sound, "Toca um beep do sistema quando o popup aparece. Sem efeito se as notificações do Windows estiverem em modo silencioso.");
 
-        groupNotification.Controls.AddRange([descTime, lblTime, timePicker, testPopup, sound]);
+        groupNotification.Controls.AddRange([descTime, lblTime, timeBox, testPopup, sound]);
 
         // ===== GroupBox "Faixas de notificação" — 1 coluna sequencial decrescente =====
         var groupThresholds = new GroupBox
@@ -507,7 +639,7 @@ public sealed class DetailsForm : Form
             var spin = new NumericUpDown
             {
                 Minimum  = 1,
-                Maximum  = 3650,
+                Maximum  = ExpiryThresholds.MaximumDays,
                 Value    = value,
                 Width    = 70,
                 Location = new Point(130, y),
@@ -616,17 +748,32 @@ public sealed class DetailsForm : Form
                 spinL7.Value  = proposed.Level7;
                 spinL1.Value  = proposed.Level1;
 
-                // Persistir tudo em sequência (cada store ignora se já está atualizado)
-                options.SaveNotificationTime(timePicker.Value.TimeOfDay);
-                options.SaveNotificationSound(sound.Checked);
-                options.SaveThresholds(proposed);
-                options.SaveAdvancedSettings(
-                    chkLogJson.Checked   ? LogFormat.Json : LogFormat.Text,
+                if (!TryParseDailyTime(timeBox.Text, out var notificationTime))
+                {
+                    feedback.ForeColor = Color.FromArgb(176, 32, 32);
+                    feedback.Text = "Informe um horário válido entre 00:00 e 23:59.";
+                    timeBox.Focus();
+                    return;
+                }
+
+                var saved = options.SaveSettings(new DetailsSettingsUpdate(
+                    notificationTime,
+                    sound.Checked,
+                    proposed,
+                    chkLogJson.Checked ? LogFormat.Json : LogFormat.Text,
                     chkEventLog.Checked,
-                    chkTelemetry.Checked);
+                    chkTelemetry.Checked));
+                if (!saved)
+                {
+                    feedback.ForeColor = Color.FromArgb(176, 32, 32);
+                    feedback.Text = "Não foi possível salvar todas as configurações. Tente novamente.";
+                    return;
+                }
+
                 onThresholdsSaved?.Invoke(proposed);
 
-                feedback.Text = $"Configurações salvas: {timePicker.Value:HH:mm}, som {(sound.Checked ? "ligado" : "desligado")}, faixas {proposed.Level1}/{proposed.Level7}/{proposed.Level15}/{proposed.Level30}.";
+                feedback.ForeColor = Color.FromArgb(28, 115, 64);
+                feedback.Text = $"Configurações salvas: {FormatDailyTime(notificationTime)}, som {(sound.Checked ? "ligado" : "desligado")}, faixas {proposed.Level1}/{proposed.Level7}/{proposed.Level15}/{proposed.Level30}.";
             }
             catch (Exception ex)
             {
@@ -654,51 +801,61 @@ public sealed class DetailsForm : Form
         var panel = new Panel
         {
             Dock      = DockStyle.Top,
-            Height    = 102,  // mais altura para acomodar linha de busca
-            Padding   = new Padding(12, 10, 12, 8),
+            Height    = SummaryPanelHeight,
+            Padding   = new Padding(12, SummaryPanelTopPadding, 12, SummaryPanelBottomPadding),
             BackColor = Color.White
         };
 
         // ===== Linha 1: cards clicaveis =====
-        var summaryItems = new FlowLayoutPanel
+        var summaryItems = new TableLayoutPanel
         {
-            Dock          = DockStyle.Top,
-            Height        = 50,
-            FlowDirection = FlowDirection.LeftToRight,
-            WrapContents  = false,
-            Margin        = new Padding(0)
+            Dock        = DockStyle.Top,
+            Height      = SummaryCardsHeight,
+            ColumnCount = 5,
+            RowCount    = 1,
+            Margin      = new Padding(0)
         };
+        for (var i = 0; i < 5; i++)
+        {
+            summaryItems.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20F));
+        }
+        summaryItems.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
         // Icones unicode complementam a cor — daltonicos distinguem por simbolo.
         // Usados apenas caracteres do BMP (U+0000..U+FFFF) que estao na fonte Segoe UI padrao.
-        summaryItems.Controls.Add(CreateSummaryItem("Expired",   "⛔  Vencidos",                Color.FromArgb(176, 32, 32)));
-        summaryItems.Controls.Add(CreateSummaryItem("Critical",  $"⚠  Até {thresholds.Level7} dias",  Color.FromArgb(180, 96, 0)));
-        summaryItems.Controls.Add(CreateSummaryItem("Warning",   $"⌛  Até {thresholds.Level30} dias", Color.FromArgb(140, 115, 0)));
-        summaryItems.Controls.Add(CreateSummaryItem("Valid",     "✓  Válidos",                 Color.FromArgb(28, 115, 64)));
-        summaryItems.Controls.Add(CreateSummaryItem("Dismissed", "⊘  Ignorados",               Color.FromArgb(90, 90, 90)));
+        summaryItems.Controls.Add(CreateSummaryItem("Expired",   "⛔  Vencidos",                     Color.FromArgb(176, 32, 32)), 0, 0);
+        summaryItems.Controls.Add(CreateSummaryItem("Critical",  $"⚠  Até {thresholds.Level7} dias",  Color.FromArgb(180, 96, 0)), 1, 0);
+        summaryItems.Controls.Add(CreateSummaryItem("Warning",   $"⌛  Até {thresholds.Level30} dias", Color.FromArgb(140, 115, 0)), 2, 0);
+        summaryItems.Controls.Add(CreateSummaryItem("Valid",     "✓  Válidos",                       Color.FromArgb(28, 115, 64)), 3, 0);
+        summaryItems.Controls.Add(CreateSummaryItem("Dismissed", "⊘  Ignorados",                     Color.FromArgb(90, 90, 90)), 4, 0);
 
         // ===== Linha 2: busca textual + filtro categoria =====
-        var controlsRow = new Panel
+        var controlsRow = new TableLayoutPanel
         {
-            Dock     = DockStyle.Top,
-            Height   = 36,
-            Margin   = new Padding(0, 6, 0, 0)
+            Dock        = DockStyle.Top,
+            Height      = SummaryControlsHeight,
+            Margin      = new Padding(0, SummaryControlsTopGap, 0, 0),
+            ColumnCount = 5,
+            RowCount    = 1
         };
+        controlsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 50));
+        controlsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        controlsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 16));
+        controlsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 62));
+        controlsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
+        controlsRow.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
         var lblSearch = new Label
         {
             Text      = "Buscar:",
             AutoSize  = false,
-            Width     = 50,
-            Height    = 28,
-            Location  = new Point(0, 4),
+            Dock      = DockStyle.Fill,
             TextAlign = ContentAlignment.MiddleLeft
         };
         var searchBox = new TextBox
         {
-            Width                   = 240,
-            Height                  = 24,
-            Location                = new Point(50, 6),
+            Dock                    = DockStyle.Fill,
+            Margin                  = new Padding(0, 6, 0, 0),
             PlaceholderText         = "Filtrar por titular ou CPF/CNPJ...",
             AccessibleName          = "Buscar por titular ou documento",
             AccessibleDescription   = "Filtra a lista por nome do titular ou número do documento. Combina com o filtro de categoria."
@@ -706,12 +863,13 @@ public sealed class DetailsForm : Form
         var tip = new ToolTip();
         tip.SetToolTip(searchBox, "Filtra a lista por nome do titular ou número do documento. A busca é case-insensitive e combina com o filtro de categoria.");
 
-        var filterArea  = new Panel { Anchor = AnchorStyles.Top | AnchorStyles.Right, Width = 220, Height = 28, Location = new Point(0, 4) };
-        var filterLabel = new Label { Text = "Mostrar:", Dock = DockStyle.Left, Width = 62, TextAlign = ContentAlignment.MiddleLeft };
+        var spacer      = new Panel { Dock = DockStyle.Fill };
+        var filterLabel = new Label { Text = "Mostrar:", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
         var filter      = new ComboBox
         {
             DropDownStyle           = ComboBoxStyle.DropDownList,
             Dock                    = DockStyle.Fill,
+            Margin                  = new Padding(0, 4, 0, 0),
             AccessibleName          = "Filtro de exibição de certificados",
             AccessibleDescription   = "Mostra apenas certificados de uma categoria (Vencidos, A vencer, Válidos ou Ignorados)."
         };
@@ -781,18 +939,11 @@ public sealed class DetailsForm : Form
             };
         }
 
-        filterArea.Controls.Add(filter);
-        filterArea.Controls.Add(filterLabel);
-
-        // FlowLayoutPanel para alinhar searchBox a esquerda e filtro a direita
-        controlsRow.Controls.Add(lblSearch);
-        controlsRow.Controls.Add(searchBox);
-        controlsRow.Controls.Add(filterArea);
-        controlsRow.Resize += (_, _) =>
-        {
-            // mantem o filterArea encostado a direita ao redimensionar
-            filterArea.Location = new Point(controlsRow.ClientSize.Width - filterArea.Width, 4);
-        };
+        controlsRow.Controls.Add(lblSearch, 0, 0);
+        controlsRow.Controls.Add(searchBox, 1, 0);
+        controlsRow.Controls.Add(spacer, 2, 0);
+        controlsRow.Controls.Add(filterLabel, 3, 0);
+        controlsRow.Controls.Add(filter, 4, 0);
 
         panel.Controls.Add(controlsRow);
         panel.Controls.Add(summaryItems);
@@ -806,14 +957,14 @@ public sealed class DetailsForm : Form
         {
             Name      = name,
             AutoSize  = false,
-            Width     = 126,
-            Height    = 42,
+            Dock      = DockStyle.Fill,
             Margin    = new Padding(0, 0, 8, 0),
             Padding   = new Padding(10, 4, 10, 4),
             BackColor = Color.FromArgb(248, 249, 251),
             ForeColor = color,
             Font      = new Font(SystemFonts.MessageBoxFont?.FontFamily ?? SystemFonts.DefaultFont.FontFamily, 9F, FontStyle.Bold),
             TextAlign = ContentAlignment.MiddleLeft,
+            AutoEllipsis = true,
             Tag       = label
         };
     }
@@ -1001,7 +1152,14 @@ public sealed class DetailsForm : Form
     {
         if (grid.SelectedRows.Count == 0)
         {
-            dismiss.Text    = "Ignorar certificado";
+            dismiss.Text    = "Ignorar";
+            dismiss.Enabled = false;
+            return;
+        }
+
+        if (grid.SelectedRows.Count > 1)
+        {
+            dismiss.Text    = "Ignorar";
             dismiss.Enabled = false;
             return;
         }
@@ -1009,7 +1167,19 @@ public sealed class DetailsForm : Form
         dismiss.Enabled = true;
         var isDismissed = grid.SelectedRows[0].DataBoundItem is DataRowView rv &&
                           rv.Row.Field<bool>("Dismissed");
-        dismiss.Text = isDismissed ? "Voltar a lembrar" : "Ignorar certificado";
+        dismiss.Text = isDismissed ? "Lembrar" : "Ignorar";
+    }
+
+    private static void UpdateRemoveButtonText(DataGridView grid, Button remove)
+    {
+        var count = grid.SelectedRows.Count;
+        remove.Enabled = count > 0;
+        remove.Text = count switch
+        {
+            0 => "Remover",
+            1 => "Remover",
+            _ => $"Remover ({count})"
+        };
     }
 
     private static bool TryGetSelectedRowView(DataGridView grid, out DataRowView rowView)
@@ -1018,6 +1188,17 @@ public sealed class DetailsForm : Form
         if (grid.SelectedRows.Count == 0) return false;
         rowView = grid.SelectedRows[0].DataBoundItem as DataRowView ?? null!;
         return rowView is not null;
+    }
+
+    private static IEnumerable<DataRowView> GetSelectedRowViews(DataGridView grid)
+    {
+        foreach (DataGridViewRow row in grid.SelectedRows)
+        {
+            if (row.DataBoundItem is DataRowView rowView)
+            {
+                yield return rowView;
+            }
+        }
     }
 
     // Helpers de parsing delegados para CertificateDocumentHelpers (testavel separadamente).

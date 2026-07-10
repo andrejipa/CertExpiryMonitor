@@ -5,6 +5,8 @@ namespace CertExpiryMonitor.Models;
 /// </summary>
 public sealed class ExpiryThresholds
 {
+    public const int MaximumDays = 3650;
+
     public int Level30 { get; set; } = 30;
     public int Level15 { get; set; } = 15;
     public int Level7  { get; set; } = 7;
@@ -26,10 +28,12 @@ public sealed class ExpiryThresholds
     /// </summary>
     public ExpiryThresholds Normalized()
     {
-        var l1  = Math.Max(1, Level1);
-        var l7  = Math.Max(l1 + 1, Level7);
-        var l15 = Math.Max(l7 + 1, Level15);
-        var l30 = Math.Max(l15 + 1, Level30);
+        var l1  = Clamp(Level1, 1, MaximumDays - 3);
+        var l7  = Clamp(Level7, l1 + 1, MaximumDays - 2);
+        var l15 = Clamp(Level15, l7 + 1, MaximumDays - 1);
+        var l30 = Clamp(Level30, l15 + 1, MaximumDays);
         return new ExpiryThresholds { Level1 = l1, Level7 = l7, Level15 = l15, Level30 = l30 };
     }
+
+    private static int Clamp(int value, int min, int max) => Math.Min(Math.Max(value, min), max);
 }

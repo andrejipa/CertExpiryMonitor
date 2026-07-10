@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using CertExpiryMonitor.Models;
+using Microsoft.Win32;
 using Windows.Data.Xml.Dom;
 using Windows.UI.Notifications;
 
@@ -19,6 +20,9 @@ public sealed class ToastActionEventArgs : EventArgs
 public sealed class ToastNotifierService
 {
     public const string AppUserModelId = "CertExpiryMonitor.Windows";
+    internal const string ProtocolScheme = "cert-expiry-monitor";
+    internal const string DetailsProtocolUri = $"{ProtocolScheme}://details";
+
     private readonly FileLogger _logger;
     private bool _isShortcutReady;
 
@@ -38,23 +42,12 @@ public sealed class ToastNotifierService
             Directory.CreateDirectory(programs);
 
             var shortcutPath = Path.Combine(programs, "CertExpiryMonitor.lnk");
-            var executable   = Environment.ProcessPath ?? Application.ExecutablePath;
-
-            // Recria o atalho somente se o executavel foi atualizado desde a ultima criacao.
-            if (File.Exists(shortcutPath))
-            {
-                var shortcutModified = File.GetLastWriteTimeUtc(shortcutPath);
-                var exeModified      = File.GetLastWriteTimeUtc(executable);
-                if (shortcutModified >= exeModified)
-                {
-                    _isShortcutReady = true;
-                    return;
-                }
-            }
+            var executable = Environment.ProcessPath ?? Application.ExecutablePath;
 
             // ShellLink/PropertyStore/PersistFile sao RCWs sobre a MESMA instancia COM.
             // Liberamos explicitamente no finally para evitar acumular ref counts entre
-            // restarts do app (atalho e recriado quando o exe e atualizado).
+            // restarts do app. Recriamos sempre: um .lnk pre-existente pode ter sido
+            // tocado por outro processo, apontar para exe antigo ou nao conter AppUserModelID.
             var shellLinkObject = (object)new CShellLink();
             try
             {
@@ -70,6 +63,7 @@ public sealed class ToastNotifierService
 
                 var persistFile = (IPersistFile)shellLinkObject;
                 persistFile.Save(shortcutPath, true);
+                EnsureProtocolHandler(executable);
                 _isShortcutReady = true;
             }
             finally
@@ -87,7 +81,28 @@ public sealed class ToastNotifierService
         }
     }
 
-    public bool Show(NotificationPlan plan, ExpiryThresholds thresholds)
+    internal static string BuildProtocolCommand(string executable)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(executable);
+        if (executable.Any(char.IsControl) || executable.Contains('"', StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Caminho do executavel invalido para protocolo.", nameof(executable));
+        }
+
+        return $"\"{executable}\" --details \"%1\"";
+    }
+
+    private static void EnsureProtocolHandler(string executable)
+    {
+        using var protocolKey = Registry.CurrentUser.CreateSubKey($@"Software\Classes\{ProtocolScheme}");
+        protocolKey?.SetValue(string.Empty, "URL:CertExpiryMonitor");
+        protocolKey?.SetValue("URL Protocol", string.Empty);
+
+        using var commandKey = Registry.CurrentUser.CreateSubKey($@"Software\Classes\{ProtocolScheme}\shell\open\command");
+        commandKey?.SetValue(string.Empty, BuildProtocolCommand(executable));
+    }
+
+    public bool Show(NotificationPlan plan, ExpiryThresholds thresholds, bool soundEnabled)
     {
         if (!plan.HasItems || !_isShortcutReady)
         {
@@ -96,20 +111,13 @@ public sealed class ToastNotifierService
 
         try
         {
-            var nearest = plan.DueCertificates
-                .OrderBy(item => item.DaysRemaining)
-                .ThenBy(item => item.Certificate.NotAfter)
-                .First();
-            var allThumbprints = string.Join(
-                ";",
-                plan.DueCertificates
-                    .Select(item => item.Certificate.Thumbprint)
-                    .Distinct(StringComparer.OrdinalIgnoreCase));
-
             var document = new XmlDocument();
-            document.LoadXml(BuildToastXml(plan, nearest.Certificate.Thumbprint, allThumbprints, thresholds));
+            document.LoadXml(BuildToastXml(plan, thresholds, soundEnabled));
 
-            var toast = new ToastNotification(document);
+            var toast = new ToastNotification(document)
+            {
+                Priority = ToastNotificationPriority.High
+            };
             toast.Activated += (_, args) =>
             {
                 try
@@ -125,7 +133,13 @@ public sealed class ToastNotifierService
                 }
             };
 
-            ToastNotificationManager.CreateToastNotifier(AppUserModelId).Show(toast);
+            var notifier = ToastNotificationManager.CreateToastNotifier(AppUserModelId);
+            if (!CanAttemptToast(notifier))
+            {
+                return false;
+            }
+
+            notifier.Show(toast);
             return true;
         }
         catch (Exception ex)
@@ -135,51 +149,30 @@ public sealed class ToastNotifierService
         }
     }
 
-    private static string BuildToastXml(NotificationPlan plan, string nearestThumbprint, string allThumbprints, ExpiryThresholds thresholds)
+    private bool CanAttemptToast(ToastNotifier notifier)
     {
-        var line = string.Join(" | ", new[]
+        try
         {
-            FormatBucket($"até {thresholds.Level30} dias", plan.Count(ExpiryBucket.Days30)),
-            FormatBucket($"até {thresholds.Level15} dias", plan.Count(ExpiryBucket.Days15)),
-            FormatBucket($"até {thresholds.Level7} dias",  plan.Count(ExpiryBucket.Days7)),
-            FormatBucket($"{thresholds.Level1} dia",       plan.Count(ExpiryBucket.Days1))
-        }.Where(text => text.Length > 0));
+            var setting = notifier.Setting;
+            if (setting == NotificationSetting.Enabled)
+            {
+                return true;
+            }
 
-        var title = EscapeXml("Certificados digitais próximos do vencimento");
-        var summary = EscapeXml($"{plan.DueCertificates.Count} certificado(s) requerem atencao.");
-        var buckets = EscapeXml(line);
-        var thumbprint = EscapeXml(Uri.EscapeDataString(nearestThumbprint));
-        var thumbprints = EscapeXml(Uri.EscapeDataString(allThumbprints));
-
-        return $"""
-        <toast launch="action=view-details">
-          <visual>
-            <binding template="ToastGeneric">
-              <text>{title}</text>
-              <text>{summary}</text>
-              <text>{buckets}</text>
-            </binding>
-          </visual>
-          <actions>
-            <action content="Lembrar depois" arguments="action=remind-later" activationType="foreground" />
-            <action content="Não lembrar este" arguments="action=dismiss-one&amp;thumbprint={thumbprint}" activationType="foreground" />
-            <action content="Não lembrar nenhum" arguments="action=dismiss-all&amp;thumbprints={thumbprints}" activationType="foreground" />
-            <action content="Configurar horario" arguments="action=configure-time" activationType="foreground" />
-            <action content="Ver detalhes" arguments="action=view-details" activationType="foreground" />
-          </actions>
-        </toast>
-        """;
+            _logger.Info($"Windows toast notifications are not enabled for this app. Setting={setting}");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.Info(
+                $"Windows toast notification setting could not be read; attempting toast anyway. " +
+                $"Exception={ex.GetType().Name}; HResult=0x{ex.HResult:X8}");
+            return true;
+        }
     }
 
-    private static string FormatBucket(string label, int count)
-    {
-        return count == 0 ? string.Empty : $"{label}: {count}";
-    }
-
-    private static string EscapeXml(string value)
-    {
-        return System.Security.SecurityElement.Escape(value) ?? string.Empty;
-    }
+    internal static string BuildToastXml(NotificationPlan plan, ExpiryThresholds thresholds, bool soundEnabled = true)
+        => ToastXmlBuilder.Build(plan, thresholds, soundEnabled);
 
     [ComImport]
     [Guid("00021401-0000-0000-C000-000000000046")]
@@ -227,7 +220,7 @@ public sealed class ToastNotifierService
 
     [ComImport]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    [Guid("00000138-0000-0000-C000-000000000046")]
+    [Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99")]
     private interface IPropertyStore
     {
         void GetCount(out uint cProps);

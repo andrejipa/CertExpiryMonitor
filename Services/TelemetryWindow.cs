@@ -24,7 +24,7 @@ public sealed class TelemetryWindow : Form
 
         var titleLabel = new Label
         {
-            Text      = "📊  Estatísticas locais de uso",
+            Text      = "◐  Estatísticas locais de uso",
             Font      = new Font(SystemFonts.MessageBoxFont?.FontFamily ?? SystemFonts.DefaultFont.FontFamily, 12F, FontStyle.Bold),
             ForeColor = Color.FromArgb(15, 76, 129),
             AutoSize  = true,
@@ -58,8 +58,8 @@ public sealed class TelemetryWindow : Form
         AddRow(grid, "  com plano de notificação",          env.ChecksWithPlan);
         AddRow(grid, "  puladas (hash/data igual)",         env.ChecksSkipped);
         AddRow(grid, "  manuais (botão / menu)",            env.ManualChecks);
-        AddRow(grid, "Toasts exibidos",                     env.NotificationsShown);
-        AddRow(grid, "Falhas de notificação (toast bloqueado)", env.NotificationFailures);
+        AddRow(grid, "Avisos exibidos",                     env.NotificationsShown);
+        AddRow(grid, "Falhas de notificação",               env.NotificationFailures);
         AddRow(grid, "Cliques: \"Não lembrar este\"",       env.DismissOne);
         AddRow(grid, "Cliques: \"Não lembrar nenhum\"",     env.DismissAll);
         AddRow(grid, "Cliques: \"Voltar a lembrar\"",       env.Restore);

@@ -9,11 +9,12 @@ internal static class Program
     private static EventWaitHandle? _activationEvent;
     private static EventWaitHandle? _configurationEvent;
     private static FileLogger? _logger;
+    private static DiagnosticEventStore? _diagnosticEvents;
 
     [STAThread]
     private static void Main(string[] args)
     {
-        _activationEvent    = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\CertExpiryMonitor.CurrentUser.Activate");
+        _activationEvent = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\CertExpiryMonitor.CurrentUser.Activate");
         _configurationEvent = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\CertExpiryMonitor.CurrentUser.Configure");
         _singleInstanceMutex = new Mutex(true, @"Local\CertExpiryMonitor.CurrentUser", out var createdNew);
 
@@ -33,41 +34,57 @@ internal static class Program
 
         ApplicationConfiguration.Initialize();
 
-        var paths        = new AppPaths();
-        var logger       = new FileLogger(paths);
-        _logger          = logger;
+        var paths = new AppPaths();
+        var logger = new FileLogger(paths);
+        _logger = logger;
+
+        // Composicao dos stores primeiro: precisamos carregar as preferencias antes
+        // do primeiro log para manter monitor.log em JSONL puro quando configurado.
+        var stateStore = new JsonStateStore(paths, logger);
+        var settingsStore = new JsonSettingsStore(paths, logger);
+        var currentSettings = settingsStore.Load();
+        logger.ApplySettings(currentSettings);
+        var diagnosticEvents = new DiagnosticEventStore(paths, logger);
+        _diagnosticEvents = diagnosticEvents;
+        diagnosticEvents.Initialize();
 
         var version = System.Reflection.Assembly.GetExecutingAssembly()
                           .GetName().Version?.ToString() ?? "unknown";
         logger.Info($"CertExpiryMonitor v{version} starting (args: [{string.Join(", ", args)}])");
+        diagnosticEvents.RecordInfo(
+            "app.startup",
+            "Program",
+            "Aplicativo iniciado.",
+            new
+            {
+                version,
+                arguments = args.Select(arg => arg.StartsWith("--", StringComparison.Ordinal) ? arg : "(redacted)").ToArray(),
+                executable = Environment.ProcessPath ?? Application.ExecutablePath
+            });
 
         Application.ThreadException += (_, e) =>
+        {
             logger.Error(e.Exception, "Unhandled UI exception");
+            _diagnosticEvents?.RecordError(e.Exception, "app.unhandled_ui_exception", "Program", "Excecao nao tratada na UI.");
+        };
 
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
         {
             if (e.ExceptionObject is Exception ex)
             {
                 _logger?.Error(ex, "Unhandled application exception");
+                _diagnosticEvents?.RecordError(ex, "app.unhandled_exception", "Program", "Excecao nao tratada no aplicativo.");
             }
         };
 
         // Composicao dos servicos
-        var stateStore          = new JsonStateStore(paths, logger);
-        var settingsStore       = new JsonSettingsStore(paths, logger);
-        var certificateReader   = new CertificateReader(logger);
-        var expiryEvaluator     = new ExpiryEvaluator();
-        var checkService        = new CertificateCheckService(settingsStore, stateStore, certificateReader, expiryEvaluator, logger);
-        var notifier            = new ToastNotifierService(logger);
-        var startup             = new StartupRegistration(logger);
-        var telemetry           = new TelemetryService(paths, logger);
-
-        var currentSettings = settingsStore.Load();
-
-        // Aplica preferencias de logging (formato Text/Json + Event Log) imediatamente,
-        // antes do primeiro write. As mensagens de "starting" acima ainda vao em texto;
-        // tudo depois deste ponto respeita o que o usuario configurou.
-        logger.ApplySettings(currentSettings);
+        var certificateReader = new CertificateReader(logger);
+        var expiryEvaluator = new ExpiryEvaluator();
+        var checkService = new CertificateCheckService(settingsStore, stateStore, certificateReader, expiryEvaluator, logger, diagnosticEvents);
+        var notifier = new ToastNotifierService(logger);
+        var startup = new StartupRegistration(logger);
+        var telemetry = new TelemetryService(paths, logger);
+        var diagnostics = new DiagnosticsBundleService(paths, startup, certificateReader, logger, diagnosticEvents);
 
         if (currentSettings.StartupEnabled) startup.EnsureRegistered();
         else startup.Remove();
@@ -86,8 +103,10 @@ internal static class Program
             notifier,
             startup,
             telemetry,
+            diagnostics,
             logger,
-            paths);
+            paths,
+            diagnosticEvents);
 
         try
         {
@@ -96,9 +115,12 @@ internal static class Program
         catch (Exception ex)
         {
             logger.Error(ex, "Application terminated unexpectedly");
+            diagnosticEvents.RecordError(ex, "app.terminated_unexpectedly", "Program", "Aplicativo terminou inesperadamente.");
         }
         finally
         {
+            diagnosticEvents.RecordInfo("app.shutdown", "Program", "Aplicativo encerrado.");
+
             // ReleaseMutex pode lancar ApplicationException se a thread atual nao
             // possuir o mutex (cenarios de reentrancia incomuns); envolvido em try
             // para nao mascarar a excecao original do Application.Run.
