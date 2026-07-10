@@ -17,18 +17,14 @@ Todas as mudanças notáveis neste projeto. Formato baseado em
 ### Testes
 
 - Regressões deterministicas para timeout/IO dos stores, falha total/parcial X.509, matriz do coordenador e manutencao SQLite explicita.
-
-### Testes
-
-- **Stryker acima de 70% na camada SQLite/diagnóstico**: reforçados testes de `DiagnosticEventStore`, `DiagnosticRedactor` e `DiagnosticsBundleService` com corrupção/sidecars SQLite, retenção por tamanho, redaction de objetos aninhados, exportação de logs/settings/telemetria e CSV de certificados.
-- **Contratos de release para SQLite**: testes garantem `PublishTrimmed=false`, compressão single-file ativa, native libraries no self-extract e `Microsoft.Data.Sqlite` fixado em `8.0.27`.
+- **Mutation testing ampliado**: o filtro inclui `NotificationCheckCoordinator`, `CertificateReader` e os resultados explícitos do check, com sobreviventes funcionais críticos eliminados.
 
 ### Validação
 
-- Build Release sem warnings, 377 testes passando e cobertura `44,73%` de linhas / `52,10%` de branches; coordenador com `100%` de linhas / `96,42%` de branches.
-- Scores por arquivo de diagnóstico: `DiagnosticEventStore.cs` `71,69%`, `DiagnosticRedactor.cs` `84,87%`, `DiagnosticsBundleService.cs` `72,48%`.
-- Publish single-file `win-x64` medido em `artifacts\release-size\sqlite-20260523-124219`: `75,50 MB`, delta `+0,99 MB` (`+1,33%`) contra baseline pré-SQLite `74,51 MB`, abaixo do limite de `77 MB`.
-- BugHunt E2E `-Maximum -KeepArtifacts` validado em `artifacts\bughunt\20260523-124304`.
+- Build Release sem warnings, 393 testes passando e cobertura `44,73%` de linhas / `52,25%` de branches; coordenador com `100%` de linhas / `96,42%` de branches.
+- Stryker final `70,31%`; na contagem normalizada do relatório HTML, `69,84%` contra baseline preservado `67,90%`.
+- Publish single-file `win-x64` com `75,52 MiB`; instalador Inno Setup com `70,31 MiB` e SHA-256 `CEC6987EF1130D10FF83E22FB79BCE579319B710E1FE5FA26F7164AE6E4600E9`.
+- BugHunt E2E `-Maximum -KeepArtifacts` concluído em `artifacts\bughunt\20260710-020702`, incluindo SQLite, logs, PNGs e UIA; neste PC o Task Scheduler negou acesso e o fallback `HKCU\Run` foi validado.
 
 ---
 
