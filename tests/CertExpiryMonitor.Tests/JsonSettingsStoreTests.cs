@@ -141,8 +141,9 @@ public sealed class JsonSettingsStoreTests : IDisposable
     {
         File.WriteAllText(_paths.SettingsPath, "{ this is not valid json");
 
-        var loaded = _store.Load();
+        var succeeded = _store.TryLoad(out var loaded);
 
+        Assert.False(succeeded);
         Assert.NotNull(loaded);
         // Defaults retornados
         Assert.NotNull(loaded.Thresholds);
@@ -157,8 +158,9 @@ public sealed class JsonSettingsStoreTests : IDisposable
         _store.Save(new AppSettings { DailyCheckTime = TimeSpan.FromHours(6) });
 
         using var locked = new FileStream(_paths.SettingsPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-        var loaded = _store.Load();
+        var succeeded = _store.TryLoad(out var loaded);
 
+        Assert.False(succeeded);
         Assert.Equal(TimeSpan.FromHours(9), loaded.DailyCheckTime);
         Assert.True(File.Exists(_paths.SettingsPath));
         Assert.Empty(Directory.GetFiles(_tempDir, "settings.json.corrupt-*"));
@@ -168,10 +170,10 @@ public sealed class JsonSettingsStoreTests : IDisposable
     public void RepeatedCorruptJsonPreservesEveryCorruptFile()
     {
         File.WriteAllText(_paths.SettingsPath, "{ primeiro json quebrado");
-        _store.Load();
+        Assert.False(_store.TryLoad(out _));
 
         File.WriteAllText(_paths.SettingsPath, "{ segundo json quebrado");
-        _store.Load();
+        Assert.False(_store.TryLoad(out _));
 
         var corruptFiles = Directory.GetFiles(_tempDir, "settings.json.corrupt-*");
         Assert.Equal(2, corruptFiles.Length);

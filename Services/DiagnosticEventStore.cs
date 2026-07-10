@@ -93,7 +93,6 @@ public sealed class DiagnosticEventStore
                 }
 
                 transaction.Commit();
-                EnforceRetention(connection);
                 return true;
             }
             catch (Exception ex)
@@ -169,7 +168,6 @@ public sealed class DiagnosticEventStore
                 command.Parameters.AddWithValue("$details_json", (object?)DiagnosticRedactor.RedactDetailsToJson(details) ?? DBNull.Value);
                 command.ExecuteNonQuery();
 
-                EnforceRetention(connection);
                 return true;
             }
             catch (Exception ex)
@@ -187,7 +185,6 @@ public sealed class DiagnosticEventStore
             Directory.CreateDirectory(_paths.RootDirectory);
             using var connection = OpenConnection();
             CreateSchema(connection);
-            EnforceRetention(connection);
             return true;
         }
         catch (Exception ex) when (IsLikelyCorruptDatabase(ex))
@@ -282,6 +279,33 @@ public sealed class DiagnosticEventStore
             create index if not exists ix_certificate_observations_captured_at_utc
                 on certificate_observations (captured_at_utc);
             """, ("$version", CurrentSchemaVersion));
+    }
+
+    /// <summary>
+    /// Executa manutencao potencialmente cara fora do caminho de gravacao de eventos.
+    /// Seguro para chamada em worker; o gate serializa com inserts e snapshots.
+    /// </summary>
+    public bool RunMaintenance()
+    {
+        lock (_gate)
+        {
+            try
+            {
+                if (!EnsureInitialized())
+                {
+                    return false;
+                }
+
+                using var connection = OpenConnection();
+                EnforceRetention(connection);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Failed to run diagnostics database maintenance");
+                return false;
+            }
+        }
     }
 
     private void EnforceRetention(SqliteConnection connection)

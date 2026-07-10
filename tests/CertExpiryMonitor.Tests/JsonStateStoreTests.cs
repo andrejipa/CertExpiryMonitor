@@ -36,8 +36,9 @@ public sealed class JsonStateStoreTests : IDisposable
     [Fact]
     public void LoadReturnsEmptyDictionaryWhenFileDoesNotExist()
     {
-        var state = _store.Load();
+        var succeeded = _store.TryLoad(out var state);
 
+        Assert.True(succeeded);
         Assert.Empty(state);
         Assert.False(File.Exists(_paths.LogPath));
     }
@@ -371,8 +372,9 @@ public sealed class JsonStateStoreTests : IDisposable
     {
         File.WriteAllText(_paths.StatePath, "{ this is not valid json !!!");
 
-        var state = _store.Load();
+        var succeeded = _store.TryLoad(out var state);
 
+        Assert.False(succeeded);
         Assert.Empty(state);
         // O arquivo original nao deve mais existir (foi renomeado para .corrupt-*)
         Assert.False(File.Exists(_paths.StatePath));
@@ -386,8 +388,9 @@ public sealed class JsonStateStoreTests : IDisposable
         Assert.True(_store.Save(MakeState(("AABBCC", CertificateNotificationState.Dismissed))));
 
         using var locked = new FileStream(_paths.StatePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-        var state = _store.Load();
+        var succeeded = _store.TryLoad(out var state);
 
+        Assert.False(succeeded);
         Assert.Empty(state);
         Assert.True(File.Exists(_paths.StatePath));
         Assert.Empty(Directory.GetFiles(_tempDir, "certificate-state.json.corrupt-*"));
@@ -404,8 +407,9 @@ public sealed class JsonStateStoreTests : IDisposable
             }
             """);
 
-        var state = _store.Load();
+        var succeeded = _store.TryLoad(out var state);
 
+        Assert.False(succeeded);
         Assert.Empty(state);
         Assert.False(File.Exists(_paths.StatePath));
         Assert.Single(Directory.GetFiles(_tempDir, "certificate-state.json.corrupt-*"));
@@ -415,10 +419,10 @@ public sealed class JsonStateStoreTests : IDisposable
     public void RepeatedCorruptJsonPreservesEveryCorruptFile()
     {
         File.WriteAllText(_paths.StatePath, "{ primeiro state quebrado");
-        _store.Load();
+        Assert.False(_store.TryLoad(out _));
 
         File.WriteAllText(_paths.StatePath, "{ segundo state quebrado");
-        _store.Load();
+        Assert.False(_store.TryLoad(out _));
 
         var corruptFiles = Directory.GetFiles(_tempDir, "certificate-state.json.corrupt-*");
         Assert.Equal(2, corruptFiles.Length);

@@ -56,7 +56,7 @@ public sealed class CertificateCheckService
     ///   (Ran=true, Plan) se a verificacao executou; (Ran=false, null) se foi pulada.
     ///   Plan sera nulo mesmo quando Ran=true se nao houver certificados pendentes.
     /// </returns>
-    public (bool Ran, NotificationPlan? Plan) RunCheck(
+    public CertificateCheckResult RunCheck(
         bool ignoreConfiguredTime,
         bool ignoreLastCheckDate,
         bool forceReminder,
@@ -72,7 +72,7 @@ public sealed class CertificateCheckService
                 "CertificateCheckService",
                 "Verificacao ignorada porque outra verificacao ja estava em execucao.",
                 new { reason = "concurrent" });
-            return (false, null);
+            return new CertificateCheckResult(CertificateCheckStatus.Skipped);
         }
         try
         {
@@ -94,11 +94,36 @@ public sealed class CertificateCheckService
                     "CertificateCheckService",
                     "Verificacao ignorada porque o horario configurado ainda nao chegou.",
                     new { reason = "configured_time_not_reached", configured_time = settings.DailyCheckTime });
-                return (false, null);
+                return new CertificateCheckResult(CertificateCheckStatus.Skipped);
             }
 
-            var state        = _stateStore.Load();
-            var certificates = _certificateReader.ReadCurrentUserPersonalCertificates();
+            if (!_stateStore.TryLoad(out var state))
+            {
+                _diagnosticEvents?.RecordWarning(
+                    "check.read_failed",
+                    "CertificateCheckService",
+                    "Verificacao abortada porque o estado persistido nao pode ser lido.",
+                    new { source = "certificate_state" });
+                return new CertificateCheckResult(CertificateCheckStatus.ReadFailed);
+            }
+
+            var certificateRead = _certificateReader.ReadCurrentUserPersonalCertificates();
+            if (!certificateRead.IsComplete)
+            {
+                _diagnosticEvents?.RecordWarning(
+                    "check.read_failed",
+                    "CertificateCheckService",
+                    "Verificacao abortada porque a leitura de certificados foi incompleta.",
+                    new
+                    {
+                        source = "x509_store",
+                        status = certificateRead.Status.ToString(),
+                        failed_count = certificateRead.FailedCertificates
+                    });
+                return new CertificateCheckResult(CertificateCheckStatus.ReadFailed);
+            }
+
+            var certificates = certificateRead.Certificates;
             var snapshotHash = ComputeSnapshotHash(certificates);
             var thresholds = (settings.Thresholds ?? new ExpiryThresholds()).Normalized();
             _diagnosticEvents?.RecordCertificateObservation(certificates, thresholds);
@@ -113,7 +138,7 @@ public sealed class CertificateCheckService
                     "CertificateCheckService",
                     "Verificacao ignorada porque ja foi executada hoje com os mesmos certificados.",
                     new { reason = "same_day_same_snapshot", certificate_count = certificates.Count });
-                return (false, null);
+                return new CertificateCheckResult(CertificateCheckStatus.Skipped);
             }
 
             var plan = forceReminder
@@ -129,7 +154,7 @@ public sealed class CertificateCheckService
                     "check.failed",
                     "CertificateCheckService",
                     "Verificacao abortada porque o estado nao foi persistido.");
-                return (false, null);
+                return new CertificateCheckResult(CertificateCheckStatus.StatePersistFailed);
             }
 
             LastPlan = plan.HasItems ? plan : null;
@@ -149,14 +174,14 @@ public sealed class CertificateCheckService
                     due_count = plan.DueCertificates.Count,
                     forceReminder
                 });
-            return (true, plan.HasItems ? plan : null);
+            return new CertificateCheckResult(CertificateCheckStatus.Completed, plan.HasItems ? plan : null);
         }
         catch (Exception ex)
         {
             LastPlan = null;
             _logger.Error(ex, "Certificate check failed");
             _diagnosticEvents?.RecordError(ex, "check.failed", "CertificateCheckService", "Verificacao de certificados falhou.");
-            return (false, null);
+            return new CertificateCheckResult(CertificateCheckStatus.Failed);
         }
         finally
         {
@@ -175,7 +200,11 @@ public sealed class CertificateCheckService
 
         try
         {
-            var state = _stateStore.Load();
+            if (!_stateStore.TryLoad(out var state))
+            {
+                _logger.Error(new IOException("certificate-state.json read failed"), "Failed to load notified certificates");
+                return false;
+            }
             _expiryEvaluator.MarkNotified(plan, state, DateTimeOffset.Now);
             if (!_stateStore.Save(state))
             {

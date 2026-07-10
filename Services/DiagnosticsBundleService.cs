@@ -17,7 +17,7 @@ public sealed class DiagnosticsBundleService
     private readonly FileLogger _logger;
     private readonly DiagnosticEventStore? _diagnosticEvents;
     private readonly Func<StartupRegistration.StartupStatus> _queryStartupStatus;
-    private readonly Func<IReadOnlyList<CertificateSnapshot>> _readCertificates;
+    private readonly Func<CertificateReadResult> _readCertificates;
 
     public DiagnosticsBundleService(
         AppPaths paths,
@@ -25,8 +25,12 @@ public sealed class DiagnosticsBundleService
         CertificateReader certificateReader,
         FileLogger logger,
         DiagnosticEventStore? diagnosticEvents = null)
-        : this(paths, logger, startup.QueryStatus, certificateReader.ReadCurrentUserPersonalCertificates, diagnosticEvents)
     {
+        _paths = paths;
+        _logger = logger;
+        _diagnosticEvents = diagnosticEvents;
+        _queryStartupStatus = startup.QueryStatus;
+        _readCertificates = certificateReader.ReadCurrentUserPersonalCertificates;
     }
 
     internal DiagnosticsBundleService(
@@ -40,7 +44,21 @@ public sealed class DiagnosticsBundleService
         _logger = logger;
         _diagnosticEvents = diagnosticEvents;
         _queryStartupStatus = queryStartupStatus;
-        _readCertificates = readCertificates;
+        _readCertificates = () => CertificateReadResult.Complete(readCertificates());
+    }
+
+    internal DiagnosticsBundleService(
+        AppPaths paths,
+        FileLogger logger,
+        Func<StartupRegistration.StartupStatus> queryStartupStatus,
+        CertificateReadResult certificateReadResult,
+        DiagnosticEventStore? diagnosticEvents = null)
+    {
+        _paths = paths;
+        _logger = logger;
+        _diagnosticEvents = diagnosticEvents;
+        _queryStartupStatus = queryStartupStatus;
+        _readCertificates = () => certificateReadResult;
     }
 
     public string CreateBundle(string destinationZipPath)
@@ -156,7 +174,16 @@ public sealed class DiagnosticsBundleService
                 "thumbprint_hash,serial_prefix,not_after,days_remaining,holder_redacted,document_last4"
             };
 
-            foreach (var cert in _readCertificates().OrderBy(c => c.NotAfter).ThenBy(c => c.Thumbprint, StringComparer.OrdinalIgnoreCase))
+            var readResult = _readCertificates();
+            if (!readResult.IsComplete)
+            {
+                File.WriteAllText(
+                    Path.Combine(tempRoot, "certificate-read-status.txt"),
+                    $"Leitura incompleta: {readResult.Status}; falhas: {readResult.FailedCertificates}.",
+                    Encoding.UTF8);
+            }
+
+            foreach (var cert in readResult.Certificates.OrderBy(c => c.NotAfter).ThenBy(c => c.Thumbprint, StringComparer.OrdinalIgnoreCase))
             {
                 var commonName = string.IsNullOrWhiteSpace(cert.SimpleName)
                     ? CertificateDocumentHelpers.GetCommonNameFallback(cert.Subject)

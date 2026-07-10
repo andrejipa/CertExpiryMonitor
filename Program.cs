@@ -42,7 +42,7 @@ internal static class Program
         // do primeiro log para manter monitor.log em JSONL puro quando configurado.
         var stateStore = new JsonStateStore(paths, logger);
         var settingsStore = new JsonSettingsStore(paths, logger);
-        var currentSettings = settingsStore.Load();
+        var settingsAvailable = settingsStore.TryLoad(out var currentSettings);
         logger.ApplySettings(currentSettings);
         var diagnosticEvents = new DiagnosticEventStore(paths, logger);
         _diagnosticEvents = diagnosticEvents;
@@ -81,13 +81,21 @@ internal static class Program
         var certificateReader = new CertificateReader(logger);
         var expiryEvaluator = new ExpiryEvaluator();
         var checkService = new CertificateCheckService(settingsStore, stateStore, certificateReader, expiryEvaluator, logger, diagnosticEvents);
+        var checkCoordinator = new NotificationCheckCoordinator(settingsStore, checkService, logger, diagnosticEvents);
         var notifier = new ToastNotifierService(logger);
         var startup = new StartupRegistration(logger);
         var telemetry = new TelemetryService(paths, logger);
         var diagnostics = new DiagnosticsBundleService(paths, startup, certificateReader, logger, diagnosticEvents);
 
-        if (currentSettings.StartupEnabled) startup.EnsureRegistered();
-        else startup.Remove();
+        if (settingsAvailable)
+        {
+            if (currentSettings.StartupEnabled) startup.EnsureRegistered();
+            else startup.Remove();
+        }
+        else
+        {
+            logger.Error(new IOException("settings.json read failed"), "Startup registration was left unchanged because settings could not be read");
+        }
 
         notifier.EnsureShortcut();
 
@@ -100,6 +108,7 @@ internal static class Program
             certificateReader,
             expiryEvaluator,
             checkService,
+            checkCoordinator,
             notifier,
             startup,
             telemetry,

@@ -348,9 +348,16 @@ public sealed class DiagnosticEventStoreTests : IDisposable
 
         Assert.True(_store.RecordInfo("test.retention_trigger", "tests", "Dispara retencao."));
 
-        using var check = OpenConnection();
-        Assert.Equal(0, ExecuteScalar<long>(check, "select count(*) from events where event_type = 'old.event';"));
-        Assert.Equal(1, ExecuteScalar<long>(check, "select count(*) from events where event_type = 'recent.event';"));
+        using (var beforeMaintenance = OpenConnection())
+        {
+            Assert.Equal(1, ExecuteScalar<long>(beforeMaintenance, "select count(*) from events where event_type = 'old.event';"));
+        }
+
+        Assert.True(_store.RunMaintenance());
+
+        using var afterMaintenance = OpenConnection();
+        Assert.Equal(0, ExecuteScalar<long>(afterMaintenance, "select count(*) from events where event_type = 'old.event';"));
+        Assert.Equal(1, ExecuteScalar<long>(afterMaintenance, "select count(*) from events where event_type = 'recent.event';"));
     }
 
     [Fact]
@@ -375,9 +382,16 @@ public sealed class DiagnosticEventStoreTests : IDisposable
 
         Assert.True(_store.RecordInfo("test.retention_observations_trigger", "tests", "Dispara retencao."));
 
-        using var check = OpenConnection();
-        Assert.Equal(0, ExecuteScalar<long>(check, "select count(*) from certificate_observations where thumbprint_hash = 'old';"));
-        Assert.Equal(1, ExecuteScalar<long>(check, "select count(*) from certificate_observations where thumbprint_hash = 'recent';"));
+        using (var beforeMaintenance = OpenConnection())
+        {
+            Assert.Equal(1, ExecuteScalar<long>(beforeMaintenance, "select count(*) from certificate_observations where thumbprint_hash = 'old';"));
+        }
+
+        Assert.True(_store.RunMaintenance());
+
+        using var afterMaintenance = OpenConnection();
+        Assert.Equal(0, ExecuteScalar<long>(afterMaintenance, "select count(*) from certificate_observations where thumbprint_hash = 'old';"));
+        Assert.Equal(1, ExecuteScalar<long>(afterMaintenance, "select count(*) from certificate_observations where thumbprint_hash = 'recent';"));
     }
 
     [Fact]
@@ -398,9 +412,17 @@ public sealed class DiagnosticEventStoreTests : IDisposable
             [NewCertificate("BB00000000000000000000000000000000000001", DateTime.Today.AddDays(2), "55")],
             new ExpiryThresholds().Normalized()));
 
-        using var connection = OpenConnection();
-        Assert.Equal(0, ExecuteScalar<long>(connection, "select count(*) from events;"));
-        Assert.Equal(0, ExecuteScalar<long>(connection, "select count(*) from certificate_observations;"));
+        using (var beforeMaintenance = OpenConnection())
+        {
+            Assert.Equal(1, ExecuteScalar<long>(beforeMaintenance, "select count(*) from events;"));
+            Assert.Equal(1, ExecuteScalar<long>(beforeMaintenance, "select count(*) from certificate_observations;"));
+        }
+
+        Assert.True(store.RunMaintenance());
+
+        using var afterMaintenance = OpenConnection();
+        Assert.Equal(0, ExecuteScalar<long>(afterMaintenance, "select count(*) from events;"));
+        Assert.Equal(0, ExecuteScalar<long>(afterMaintenance, "select count(*) from certificate_observations;"));
     }
 
     [Fact]
@@ -421,7 +443,7 @@ public sealed class DiagnosticEventStoreTests : IDisposable
             _logger,
             new DiagnosticEventStoreOptions { MaxDatabaseBytes = currentLength, Retention = TimeSpan.FromDays(3650) });
 
-        Assert.True(store.Initialize());
+        Assert.True(store.RunMaintenance());
 
         using var check = OpenConnection();
         Assert.Equal(1, ExecuteScalar<long>(check, "select count(*) from events where event_type = 'size.equal';"));
@@ -445,7 +467,7 @@ public sealed class DiagnosticEventStoreTests : IDisposable
             _logger,
             new DiagnosticEventStoreOptions { MaxDatabaseBytes = currentLength - 1, Retention = TimeSpan.FromDays(3650) });
 
-        Assert.True(store.Initialize());
+        Assert.True(store.RunMaintenance());
 
         using var check = OpenConnection();
         Assert.Equal(0, ExecuteScalar<long>(check, "select count(*) from events where event_type = 'size.exceeds';"));

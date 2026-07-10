@@ -23,11 +23,18 @@ public sealed class JsonStateStore
 
     private readonly AppPaths _paths;
     private readonly FileLogger _logger;
+    private readonly JsonStoreReadHooks? _readHooks;
 
     public JsonStateStore(AppPaths paths, FileLogger logger)
+        : this(paths, logger, readHooks: null)
+    {
+    }
+
+    internal JsonStateStore(AppPaths paths, FileLogger logger, JsonStoreReadHooks? readHooks)
     {
         _paths = paths;
         _logger = logger;
+        _readHooks = readHooks;
     }
 
     private sealed class StateFileEnvelope
@@ -43,21 +50,23 @@ public sealed class JsonStateStore
         public string Payload { get; set; } = string.Empty;
     }
 
-    public Dictionary<string, CertificateStateRecord> Load()
+    public bool TryLoad(out Dictionary<string, CertificateStateRecord> state)
     {
+        state = new Dictionary<string, CertificateStateRecord>(StringComparer.OrdinalIgnoreCase);
         var hasLock = false;
         try
         {
-            hasLock = FileMutex.WaitOne(FileLockTimeoutMilliseconds);
+            hasLock = _readHooks?.AcquireLock?.Invoke(FileLockTimeoutMilliseconds)
+                ?? FileMutex.WaitOne(FileLockTimeoutMilliseconds);
             if (!hasLock)
             {
                 _logger.Error(new TimeoutException("State file lock timeout"), "Failed to acquire state file lock");
-                return new Dictionary<string, CertificateStateRecord>(StringComparer.OrdinalIgnoreCase);
+                return false;
             }
 
             if (!File.Exists(_paths.StatePath))
             {
-                return new Dictionary<string, CertificateStateRecord>(StringComparer.OrdinalIgnoreCase);
+                return true;
             }
 
             // Size guard: state legitimo cresce ~200B por cert; 10MB suporta dezenas
@@ -70,13 +79,13 @@ public sealed class JsonStateStore
                     new InvalidDataException($"certificate-state.json too large ({info.Length} bytes); ignoring"),
                     "State file exceeded size guard");
                 PreserveCorruptFile(_paths.StatePath);
-                return new Dictionary<string, CertificateStateRecord>(StringComparer.OrdinalIgnoreCase);
+                return false;
             }
 
-            var json = File.ReadAllText(_paths.StatePath);
+            var json = (_readHooks?.ReadAllText ?? File.ReadAllText)(_paths.StatePath);
             var records = DeserializeRecords(json);
 
-            return records
+            state = records
                 .Select(record => new
                 {
                     Thumbprint = NormalizeThumbprint(record.Thumbprint ?? string.Empty),
@@ -93,34 +102,36 @@ public sealed class JsonStateStore
                         return record;
                     },
                     StringComparer.OrdinalIgnoreCase);
+            return true;
         }
         catch (JsonException ex)
         {
             _logger.Error(ex, "Failed to read certificate state");
             PreserveCorruptFile(_paths.StatePath);
-            return new Dictionary<string, CertificateStateRecord>(StringComparer.OrdinalIgnoreCase);
+            return false;
         }
         catch (IOException ex)
         {
             _logger.Error(ex, "Transient IO error while reading certificate state");
-            return new Dictionary<string, CertificateStateRecord>(StringComparer.OrdinalIgnoreCase);
+            return false;
         }
         catch (UnauthorizedAccessException ex)
         {
             _logger.Error(ex, "Transient access error while reading certificate state");
-            return new Dictionary<string, CertificateStateRecord>(StringComparer.OrdinalIgnoreCase);
+            return false;
         }
         catch (Exception ex)
         {
             _logger.Error(ex, "Failed to read certificate state");
             PreserveCorruptFile(_paths.StatePath);
-            return new Dictionary<string, CertificateStateRecord>(StringComparer.OrdinalIgnoreCase);
+            return false;
         }
         finally
         {
             if (hasLock)
             {
-                FileMutex.ReleaseMutex();
+                if (_readHooks?.ReleaseLock is { } releaseLock) releaseLock();
+                else FileMutex.ReleaseMutex();
             }
         }
     }
@@ -167,7 +178,8 @@ public sealed class JsonStateStore
             var envelope = new StateFileEnvelope { Version = CurrentStateVersion, Records = records };
             var json = JsonSerializer.Serialize(envelope, JsonOptions);
             var encryptedJson = EncryptStateJson(json);
-            AtomicWrite(_paths.StatePath, encryptedJson, deleteBackup: true);
+            if (_readHooks?.WriteAtomically is { } writeAtomically) writeAtomically(_paths.StatePath, encryptedJson);
+            else AtomicWrite(_paths.StatePath, encryptedJson, deleteBackup: true);
             return true;
         }
         catch (Exception ex)

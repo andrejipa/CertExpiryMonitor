@@ -177,9 +177,10 @@ public sealed class StressTests : IDisposable
         File.WriteAllText(_paths.SettingsPath, giant);
 
         var store = new JsonSettingsStore(_paths, _logger);
-        var loaded = store.Load();
+        var succeeded = store.TryLoad(out var loaded);
 
-        // Defaults retornados
+        Assert.False(succeeded);
+        // O out permanece seguro para exibicao, mas nao pode ser persistido pelo chamador.
         Assert.NotNull(loaded);
         Assert.Equal(string.Empty, loaded.LastCertificateSnapshotHash);
 

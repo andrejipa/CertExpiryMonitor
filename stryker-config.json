@@ -18,6 +18,9 @@
     "mutate": [
       "Services/ExpiryEvaluator.cs",
       "Services/CertificateCheckService.cs",
+      "Services/CertificateCheckResult.cs",
+      "Services/NotificationCheckCoordinator.cs",
+      "Services/CertificateReader.cs",
       "Services/JsonStateStore.cs",
       "Services/JsonSettingsStore.cs",
       "Services/StartupRegistrationCommandBuilder.cs",

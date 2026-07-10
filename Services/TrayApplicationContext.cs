@@ -14,6 +14,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly CertificateReader _certificateReader;
     private readonly ExpiryEvaluator _expiryEvaluator;
     private readonly CertificateCheckService _checkService;
+    private readonly NotificationCheckCoordinator _checkCoordinator;
     private readonly ToastNotifierService _notifier;
     private readonly StartupRegistration _startup;
     private readonly TelemetryService _telemetry;
@@ -39,6 +40,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         CertificateReader certificateReader,
         ExpiryEvaluator expiryEvaluator,
         CertificateCheckService checkService,
+        NotificationCheckCoordinator checkCoordinator,
         ToastNotifierService notifier,
         StartupRegistration startup,
         TelemetryService telemetry,
@@ -54,6 +56,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         _certificateReader = certificateReader;
         _expiryEvaluator = expiryEvaluator;
         _checkService = checkService;
+        _checkCoordinator = checkCoordinator;
         _notifier = notifier;
         _startup = startup;
         _telemetry = telemetry;
@@ -62,11 +65,20 @@ public sealed class TrayApplicationContext : ApplicationContext
         _logger = logger;
         _paths = paths;
         _uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
-        _settings = NormalizeSettings(_settingsStore.Load());
+        var settingsAvailable = _settingsStore.TryLoad(out _settings);
+        _settings = NotificationCheckCoordinator.NormalizeSettings(_settings);
         _telemetry.Enabled = _settings.TelemetryEnabled;
         _forceNextScheduledNotification = _settings.ForceNextNotificationReminder;
 
         _notifyIcon = BuildNotifyIcon();
+        if (!settingsAvailable)
+        {
+            _notifyIcon.ShowBalloonTip(
+                5000,
+                "Monitor de Certificados A1",
+                "Não foi possível ler as configurações. Nenhuma alteração será gravada até a leitura ser normalizada.",
+                ToolTipIcon.Warning);
+        }
         UpdateTrayTooltip();
 
         _timer = new System.Windows.Forms.Timer();
@@ -78,6 +90,8 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         _notifier.Activated += (_, eventArgs) =>
             _uiContext.Post(_ => HandleToastAction(eventArgs.Arguments), null);
+
+        _ = Task.Run(_diagnosticEvents.RunMaintenance);
 
         if (args.Any(arg => arg.Equals("--configure", StringComparison.OrdinalIgnoreCase)))
         {
@@ -252,8 +266,19 @@ public sealed class TrayApplicationContext : ApplicationContext
             _timer.Stop();
             var ignoreConfiguredTime = _ignoreConfiguredTimeOnNextTimer;
             _ignoreConfiguredTimeOnNextTimer = false;
-            var ran = RunCheck(ignoreConfiguredTime: ignoreConfiguredTime, ignoreLastCheckDate: false);
-            if (!ran && ignoreConfiguredTime && _forceNextScheduledNotification)
+            var result = RunCheck(ignoreConfiguredTime: ignoreConfiguredTime, ignoreLastCheckDate: false);
+            if (result.Ran)
+            {
+                _ = Task.Run(_diagnosticEvents.RunMaintenance);
+            }
+            if (result.ShouldRetry)
+            {
+                ScheduleTimer(TimeSpan.FromMinutes(5));
+                retryScheduled = true;
+                return;
+            }
+
+            if (!result.Ran && ignoreConfiguredTime && _forceNextScheduledNotification)
             {
                 _ignoreConfiguredTimeOnNextTimer = true;
                 ScheduleTimer(TimeSpan.FromSeconds(1));
@@ -307,111 +332,73 @@ public sealed class TrayApplicationContext : ApplicationContext
     }
 
     // -------------------------------------------------------------------------
-    // Logica de verificacao (delega ao CertificateCheckService)
+    // Logica de verificacao (delega ao coordenador testavel)
     // -------------------------------------------------------------------------
 
-    private bool RunCheck(bool ignoreConfiguredTime, bool ignoreLastCheckDate, bool showNoAlertFeedback = false)
+    private CheckCycleResult RunCheck(bool ignoreConfiguredTime, bool ignoreLastCheckDate, bool showNoAlertFeedback = false)
     {
         if (showNoAlertFeedback)
         {
             _diagnosticEvents.RecordInfo("check.manual_requested", "TrayApplicationContext", "Usuario solicitou verificacao manual.");
         }
 
-        _settings = NormalizeSettings(_settingsStore.Load());
-        _forceNextScheduledNotification |= _settings.ForceNextNotificationReminder;
-        var forceReminder = _forceNextScheduledNotification;
-        var keepForcedReminder = forceReminder;
+        var result = _checkCoordinator.Run(
+            new CheckCycleRequest(ignoreConfiguredTime, ignoreLastCheckDate),
+            ShowNotification);
 
-        var (ran, plan) = _checkService.RunCheck(
-            ignoreConfiguredTime,
-            ignoreLastCheckDate,
-            forceReminder,
-            _settings);
+        if (result.Settings is { } resultSettings)
+        {
+            _settings = resultSettings;
+            _forceNextScheduledNotification = resultSettings.ForceNextNotificationReminder;
+        }
 
         // Telemetria: contagem total + skip vs executou + manual (showNoAlertFeedback=true significa botao manual)
         _telemetry.Increment(t =>
         {
             t.TotalChecks++;
-            if (!ran) t.ChecksSkipped++;
+            if (!result.Ran) t.ChecksSkipped++;
             if (showNoAlertFeedback) t.ManualChecks++;
         });
 
-        if (!ran) return false;
-
-        var completedCheckDate = _settings.LastCheckDate;
-        var completedSnapshotHash = _settings.LastCertificateSnapshotHash;
-        var thresholds = _settings.Thresholds.Normalized();
-
-        if (plan is not null)
+        if (result.Plan is not null)
         {
             _telemetry.Increment(t => t.ChecksWithPlan++);
-            var shown = ShowNotification(plan);
-            if (shown)
-            {
-                if (!_checkService.MarkNotified(plan, thresholds))
-                {
-                    keepForcedReminder = forceReminder;
-                    _telemetry.Increment(t => t.NotificationFailures++);
-                    _settings.LastCheckDate = null;
-                    _settings.LastCertificateSnapshotHash = string.Empty;
-                    _logger.Error(new IOException("certificate-state.json save failed"), "Notification was shown, but notified state was not persisted");
-                    _diagnosticEvents.RecordError(
-                        new IOException("certificate-state.json save failed"),
-                        "notification.persist_failed",
-                        "TrayApplicationContext",
-                        "Notificacao exibida, mas estado notificado nao foi persistido.");
-                }
-                else
-                {
-                    keepForcedReminder = false;
-                    _telemetry.Increment(t => t.NotificationsShown++);
-                    _settings.LastCheckDate = completedCheckDate;
-                    _settings.LastCertificateSnapshotHash = completedSnapshotHash;
-                }
-            }
-            else
-            {
-                keepForcedReminder = forceReminder;
-                _telemetry.Increment(t => t.NotificationFailures++);
-                _settings.LastCheckDate = null;
-                _settings.LastCertificateSnapshotHash = string.Empty;
-                _diagnosticEvents.RecordWarning(
-                    "notification.failed",
-                    "TrayApplicationContext",
-                    "Notificacao nao foi exibida por nenhum canal.",
-                    new { due_count = plan.DueCertificates.Count });
-            }
         }
-        else if (showNoAlertFeedback)
+
+        if (result.Status == CheckCycleStatus.NotificationShown)
         {
-            keepForcedReminder = false;
+            _telemetry.Increment(t => t.NotificationsShown++);
+        }
+        else if (result.Status is CheckCycleStatus.NotificationFailed or
+                 CheckCycleStatus.StatePersistFailed or
+                 CheckCycleStatus.SettingsPersistFailed)
+        {
+            _telemetry.Increment(t => t.NotificationFailures++);
+        }
+
+        if (showNoAlertFeedback && result.Status == CheckCycleStatus.CompletedNoDue)
+        {
             _notifyIcon.ShowBalloonTip(
                 3000,
                 "Monitor de Certificados A1",
                 "Nenhum certificado próximo do vencimento.",
                 ToolTipIcon.Info);
         }
-        else
+        else if (showNoAlertFeedback && result.Status == CheckCycleStatus.ReadFailed)
         {
-            keepForcedReminder = false;
+            _notifyIcon.ShowBalloonTip(
+                5000,
+                "Monitor de Certificados A1",
+                "A verificação não foi concluída porque settings, estado ou certificados não puderam ser lidos. Nenhum dado foi alterado.",
+                ToolTipIcon.Warning);
         }
 
-        _forceNextScheduledNotification = keepForcedReminder;
-        _settings.ForceNextNotificationReminder = keepForcedReminder;
-
-        if (!_settingsStore.Save(_settings))
+        if (result.Ran)
         {
-            _logger.Error(new IOException("settings.json save failed"), "Failed to persist check result settings");
-            _diagnosticEvents.RecordError(
-                new IOException("settings.json save failed"),
-                "check.settings_persist_failed",
-                "TrayApplicationContext",
-                "Falha ao persistir resultado da verificacao nas configuracoes.");
-            return false;
+            UpdateTrayTooltip();
         }
 
-        UpdateTrayTooltip();
-        return true;
+        return result;
     }
 
     // -------------------------------------------------------------------------
@@ -453,7 +440,10 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         try
         {
-            _settings = NormalizeSettings(_settingsStore.Load());
+            if (_settingsStore.TryLoad(out var latestSettings))
+            {
+                _settings = NormalizeSettings(latestSettings);
+            }
             if (_settings.NotificationSoundEnabled)
             {
                 System.Media.SystemSounds.Exclamation.Play();
@@ -595,7 +585,11 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private bool TryDismissOne(string thumbprint)
     {
-        var state = _stateStore.Load();
+        if (!_stateStore.TryLoad(out var state))
+        {
+            _logger.Error(new IOException("certificate-state.json read failed"), "Failed to dismiss certificate because state could not be read");
+            return false;
+        }
         _expiryEvaluator.DismissCertificate(thumbprint, state);
         if (!_stateStore.Save(state))
         {
@@ -618,7 +612,11 @@ public sealed class TrayApplicationContext : ApplicationContext
         var lastPlan = _checkService.LastPlan;
         if (lastPlan is null) return;
 
-        var state = _stateStore.Load();
+        if (!_stateStore.TryLoad(out var state))
+        {
+            _logger.Error(new IOException("certificate-state.json read failed"), "Failed to dismiss current certificates because state could not be read");
+            return;
+        }
         _expiryEvaluator.DismissCertificates(
             lastPlan.DueCertificates.Select(item => item.Certificate.Thumbprint),
             state);
@@ -640,7 +638,11 @@ public sealed class TrayApplicationContext : ApplicationContext
     private void DismissAll(IEnumerable<string> thumbprints)
     {
         var thumbprintList = thumbprints.ToArray();
-        var state = _stateStore.Load();
+        if (!_stateStore.TryLoad(out var state))
+        {
+            _logger.Error(new IOException("certificate-state.json read failed"), "Failed to dismiss toast certificates because state could not be read");
+            return;
+        }
         _expiryEvaluator.DismissCertificates(thumbprintList, state);
         if (!_stateStore.Save(state))
         {
@@ -677,12 +679,22 @@ public sealed class TrayApplicationContext : ApplicationContext
             return;
         }
 
-        var state = _stateStore.Load();
-        var certificates = _certificateReader.ReadCurrentUserPersonalCertificates();
+        if (!_stateStore.TryLoad(out var state))
+        {
+            MessageBox.Show(
+                "Não foi possível ler o estado dos certificados. A janela não será aberta para evitar alterações sobre dados incompletos.",
+                "CertExpiryMonitor",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
+        var certificateRead = _certificateReader.ReadCurrentUserPersonalCertificates();
 
         _detailsForm = new DetailsForm(new DetailsFormOptions
         {
-            Certificates = certificates,
+            Certificates = certificateRead.Certificates,
+            CertificateReadStatus = certificateRead.Status,
             State = state,
             NotificationTime = _settings.DailyCheckTime,
             NotificationSoundEnabled = _settings.NotificationSoundEnabled,
@@ -707,11 +719,14 @@ public sealed class TrayApplicationContext : ApplicationContext
         _detailsForm.FocusExisting(openSettingsTab);
     }
 
-    private (IReadOnlyList<CertificateSnapshot>, IReadOnlyDictionary<string, CertificateStateRecord>) LoadCertificateDetails()
+    private (CertificateReadResult CertificateRead, IReadOnlyDictionary<string, CertificateStateRecord> State) LoadCertificateDetails()
     {
-        return (
-            _certificateReader.ReadCurrentUserPersonalCertificates(),
-            _stateStore.Load());
+        if (!_stateStore.TryLoad(out var state))
+        {
+            throw new IOException("certificate-state.json could not be read");
+        }
+
+        return (_certificateReader.ReadCurrentUserPersonalCertificates(), state);
     }
 
     // -------------------------------------------------------------------------
@@ -720,9 +735,15 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void ToggleStartup(object? sender)
     {
-        var previousSettings = NormalizeSettings(_settingsStore.Load());
+        if (!_settingsStore.TryLoad(out var loadedSettings))
+        {
+            _logger.Error(new IOException("settings.json read failed"), "Failed to toggle startup because settings could not be read");
+            return;
+        }
+
+        var previousSettings = NormalizeSettings(loadedSettings);
         var previousStartupEnabled = previousSettings.StartupEnabled;
-        var newSettings = NormalizeSettings(_settingsStore.Load());
+        var newSettings = NormalizeSettings(loadedSettings);
         newSettings.StartupEnabled = !newSettings.StartupEnabled;
 
         var startupChanged = newSettings.StartupEnabled
@@ -780,7 +801,11 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private bool RestoreOne(string thumbprint)
     {
-        var state = _stateStore.Load();
+        if (!_stateStore.TryLoad(out var state))
+        {
+            _logger.Error(new IOException("certificate-state.json read failed"), "Failed to restore certificate because state could not be read");
+            return false;
+        }
         _expiryEvaluator.RestoreCertificate(thumbprint, state);
         if (!_stateStore.Save(state))
         {
@@ -823,7 +848,13 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private bool SaveSettings(DetailsSettingsUpdate update)
     {
-        var currentSettings = NormalizeSettings(_settingsStore.Load());
+        if (!_settingsStore.TryLoad(out var loadedSettings))
+        {
+            _logger.Error(new IOException("settings.json read failed"), "Failed to save settings because current settings could not be read");
+            return false;
+        }
+
+        var currentSettings = NormalizeSettings(loadedSettings);
         var plan = DetailsSettingsPlanner.Build(currentSettings, update, DateTime.Now);
         var newSettings = plan.Settings;
 
@@ -902,8 +933,20 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         _logger.Info("User requested test notification.");
         _diagnosticEvents.RecordInfo("notification.test_requested", "TrayApplicationContext", "Usuario solicitou teste de notificacao.");
-        var state = _stateStore.Load();
-        var certificates = _certificateReader.ReadCurrentUserPersonalCertificates();
+        if (!_stateStore.TryLoad(out var state))
+        {
+            MessageBox.Show("Não foi possível ler o estado dos certificados.", "Certificados digitais", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
+        }
+
+        var certificateRead = _certificateReader.ReadCurrentUserPersonalCertificates();
+        if (!certificateRead.IsComplete)
+        {
+            MessageBox.Show("A leitura do repositório de certificados foi incompleta. O popup de teste não será enviado.", "Certificados digitais", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
+        }
+
+        var certificates = certificateRead.Certificates;
         var thresholds = _settings.Thresholds.Normalized();
         var plan = _expiryEvaluator.BuildReminderPlan(certificates, state, DateOnly.FromDateTime(DateTime.Today), thresholds);
 

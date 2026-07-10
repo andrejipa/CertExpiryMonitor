@@ -21,42 +21,57 @@ public class CertificateReader
     private const string IcpBrasilA1PolicyPrefix = "2.16.76.1.2.1.";
 
     private readonly FileLogger _logger;
+    private readonly Action<Action<X509Certificate2>> _scanStore;
+    private readonly Func<X509Certificate2, CertificateSnapshot?> _snapshotFactory;
 
     public CertificateReader(FileLogger logger)
+        : this(logger, ScanCurrentUserStore, TryCreateSnapshot)
     {
-        _logger = logger;
     }
 
-    public virtual IReadOnlyList<CertificateSnapshot> ReadCurrentUserPersonalCertificates()
+    internal CertificateReader(
+        FileLogger logger,
+        Action<Action<X509Certificate2>> scanStore,
+        Func<X509Certificate2, CertificateSnapshot?> snapshotFactory)
+    {
+        _logger = logger;
+        _scanStore = scanStore;
+        _snapshotFactory = snapshotFactory;
+    }
+
+    public virtual CertificateReadResult ReadCurrentUserPersonalCertificates()
     {
         var results = new List<CertificateSnapshot>();
+        var failedCertificates = 0;
 
         try
         {
-            using var store = new X509Store(StoreName.My, StoreLocation.CurrentUser);
-            store.Open(OpenFlags.ReadOnly | OpenFlags.OpenExistingOnly);
-
-            foreach (var certificate in store.Certificates)
+            _scanStore(certificate =>
             {
                 try
                 {
-                    var snapshot = TryCreateSnapshot(certificate);
+                    var snapshot = _snapshotFactory(certificate);
                     if (snapshot is null)
                     {
-                        continue;
+                        return;
                     }
 
                     results.Add(snapshot);
                 }
                 catch (Exception ex)
                 {
+                    failedCertificates++;
                     _logger.Error(ex, "Failed to inspect one certificate");
                 }
-            }
+            });
         }
         catch (Exception ex)
         {
             _logger.Error(ex, "Failed to read CurrentUser Personal store");
+            return new CertificateReadResult(
+                Deduplicate(results),
+                CertificateReadStatus.StoreFailure,
+                Math.Max(1, failedCertificates));
         }
 
         // Dedup por thumbprint normalizado. Cenarios raros mas reais:
@@ -65,10 +80,26 @@ public class CertificateReader
         // - dois containers PFX com mesmo certificado.
         // Sem dedup, DetailsForm exibiria duas linhas para o mesmo cert e dismiss
         // marcaria ambas inconsistentemente. Manter o mais recente (maior NotAfter).
-        return results
+        var certificates = Deduplicate(results);
+        return failedCertificates == 0
+            ? CertificateReadResult.Complete(certificates)
+            : new CertificateReadResult(certificates, CertificateReadStatus.PartialFailure, failedCertificates);
+    }
+
+    private static IReadOnlyList<CertificateSnapshot> Deduplicate(IEnumerable<CertificateSnapshot> results) =>
+        results
             .GroupBy(c => c.Thumbprint, StringComparer.OrdinalIgnoreCase)
             .Select(g => g.OrderByDescending(c => c.NotAfter).First())
             .ToList();
+
+    private static void ScanCurrentUserStore(Action<X509Certificate2> inspect)
+    {
+        using var store = new X509Store(StoreName.My, StoreLocation.CurrentUser);
+        store.Open(OpenFlags.ReadOnly | OpenFlags.OpenExistingOnly);
+        foreach (var certificate in store.Certificates)
+        {
+            inspect(certificate);
+        }
     }
 
     public bool RemoveFromCurrentUserPersonalStore(string thumbprint)

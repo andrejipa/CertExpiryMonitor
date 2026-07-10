@@ -228,6 +228,32 @@ public sealed class DiagnosticsBundleServiceTests : IDisposable
     }
 
     [Fact]
+    public void CreateBundleRecordsPartialCertificateReadStatusAndKeepsSuccessfulRows()
+    {
+        var certificate = new CertificateSnapshot(
+            "AA00000000000000000000000000000000000001",
+            "CN=Teste",
+            "CN=Issuer",
+            DateTime.Today.AddDays(5),
+            "12345678",
+            "Teste");
+        var service = new DiagnosticsBundleService(
+            _paths,
+            _logger,
+            () => new StartupRegistration.StartupStatus(false, null, false, null, "app.exe"),
+            new CertificateReadResult([certificate], CertificateReadStatus.PartialFailure, 1));
+        var zipPath = NewExternalZipPath("partial-read.zip");
+
+        service.CreateBundle(zipPath);
+
+        using var archive = ZipFile.OpenRead(zipPath);
+        var status = ReadEntry(archive, "certificate-read-status.txt");
+        var summary = ReadEntry(archive, "certificate-summary.csv");
+        Assert.Contains("PartialFailure", status, StringComparison.Ordinal);
+        Assert.Contains(DiagnosticRedactor.HashThumbprint(certificate.Thumbprint), summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CreateBundleOrdersCertificateSummaryUsesFallbackAndEscapesCsv()
     {
         var service = new DiagnosticsBundleService(

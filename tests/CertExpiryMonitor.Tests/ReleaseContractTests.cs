@@ -339,16 +339,16 @@ public sealed class ReleaseContractTests
     [Fact]
     public void TrayDoesNotPersistDailyCheckBeforeNotificationOutcome()
     {
-        var source = File.ReadAllText(Path.Combine(Root, "Services", "TrayApplicationContext.cs"));
-        var runCheckStart = source.IndexOf("private bool RunCheck", StringComparison.Ordinal);
-        var showIndex = source.IndexOf("var shown = ShowNotification(plan);", runCheckStart, StringComparison.Ordinal);
-        var saveIndex = source.IndexOf("if (!_settingsStore.Save(_settings))", runCheckStart, StringComparison.Ordinal);
+        var source = File.ReadAllText(Path.Combine(Root, "Services", "NotificationCheckCoordinator.cs"));
+        var runCheckStart = source.IndexOf("public CheckCycleResult Run", StringComparison.Ordinal);
+        var showIndex = source.IndexOf("if (!showNotification(plan))", runCheckStart, StringComparison.Ordinal);
+        var saveIndex = source.IndexOf("if (!_settingsStore.Save(settings))", showIndex, StringComparison.Ordinal);
 
-        Assert.True(runCheckStart >= 0, "RunCheck deve existir em TrayApplicationContext.");
-        Assert.True(showIndex >= 0, "RunCheck deve exibir notificacao antes de consolidar o check do dia.");
+        Assert.True(runCheckStart >= 0, "Coordenador deve expor Run.");
+        Assert.True(showIndex > runCheckStart, "Coordenador deve observar o resultado da notificacao.");
         Assert.True(saveIndex > showIndex, "settings.json nao deve ser salvo antes do resultado da notificacao.");
-        Assert.Contains("_settings.LastCheckDate = null;", source, StringComparison.Ordinal);
-        Assert.Contains("_settings.LastCertificateSnapshotHash = string.Empty;", source, StringComparison.Ordinal);
+        Assert.Contains("settings.LastCheckDate = null;", source, StringComparison.Ordinal);
+        Assert.Contains("settings.LastCertificateSnapshotHash = string.Empty;", source, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -356,15 +356,14 @@ public sealed class ReleaseContractTests
     {
         var source = File.ReadAllText(Path.Combine(Root, "Services", "TrayApplicationContext.cs"));
         var timerStart = source.IndexOf("private void OnTimerTick", StringComparison.Ordinal);
-        var retryGuard = source.IndexOf("!ran && ignoreConfiguredTime && _forceNextScheduledNotification", timerStart, StringComparison.Ordinal);
+        var retryGuard = source.IndexOf("!result.Ran && ignoreConfiguredTime && _forceNextScheduledNotification", timerStart, StringComparison.Ordinal);
         var rearmIgnore = source.IndexOf("_ignoreConfiguredTimeOnNextTimer = true;", retryGuard, StringComparison.Ordinal);
         var retryTimer = source.IndexOf("ScheduleTimer(TimeSpan.FromSeconds(1));", retryGuard, StringComparison.Ordinal);
         var retryFlag = source.IndexOf("retryScheduled = true;", retryGuard, StringComparison.Ordinal);
         var finalGuard = source.IndexOf("if (!retryScheduled)", retryGuard, StringComparison.Ordinal);
-        var runCheckStart = source.IndexOf("private bool RunCheck", StringComparison.Ordinal);
-        var forceCapture = source.IndexOf("var forceReminder = _forceNextScheduledNotification;", runCheckStart, StringComparison.Ordinal);
-        var keepReminder = source.IndexOf("var keepForcedReminder = forceReminder;", forceCapture, StringComparison.Ordinal);
-        var persistedReminder = source.IndexOf("_settings.ForceNextNotificationReminder = keepForcedReminder;", forceCapture, StringComparison.Ordinal);
+        var coordinator = File.ReadAllText(Path.Combine(Root, "Services", "NotificationCheckCoordinator.cs"));
+        var forceCapture = coordinator.IndexOf("var forceReminder = settings.ForceNextNotificationReminder;", StringComparison.Ordinal);
+        var persistedReminder = coordinator.IndexOf("settings.ForceNextNotificationReminder = forceReminder;", forceCapture, StringComparison.Ordinal);
 
         Assert.True(timerStart >= 0, "OnTimerTick deve existir.");
         Assert.True(retryGuard > timerStart, "Timer deve rearmar check imediato quando o check forçado nao executa.");
@@ -372,9 +371,8 @@ public sealed class ReleaseContractTests
         Assert.True(retryTimer > retryGuard, "Retry deve ser agendado rapidamente.");
         Assert.True(retryFlag > retryTimer, "Retry imediato deve impedir reagendamento diario no finally.");
         Assert.True(finalGuard > retryFlag, "Finally nao deve sobrescrever retry imediato com agenda diaria.");
-        Assert.True(forceCapture > runCheckStart, "RunCheck deve capturar reminder forçado.");
-        Assert.True(keepReminder > forceCapture, "Reminder forçado deve ser rastreado ate o resultado da notificacao.");
-        Assert.True(persistedReminder > keepReminder, "Reminder forçado deve ser persistido ou limpo conforme o resultado final.");
+        Assert.True(forceCapture >= 0, "Coordenador deve capturar reminder forçado persistido.");
+        Assert.True(persistedReminder > forceCapture, "Reminder forçado deve ser preservado quando a notificacao falha.");
     }
 
     [Fact]
@@ -471,17 +469,16 @@ public sealed class ReleaseContractTests
     public void MarkNotifiedFailurePreventsDailyCheckConsolidation()
     {
         var service = File.ReadAllText(Path.Combine(Root, "Services", "CertificateCheckService.cs"));
-        var tray = File.ReadAllText(Path.Combine(Root, "Services", "TrayApplicationContext.cs"));
+        var coordinator = File.ReadAllText(Path.Combine(Root, "Services", "NotificationCheckCoordinator.cs"));
         var markStart = service.IndexOf("public bool MarkNotified", StringComparison.Ordinal);
         var saveFailure = service.IndexOf("return false;", markStart, StringComparison.Ordinal);
-        var runCheckStart = tray.IndexOf("private bool RunCheck", StringComparison.Ordinal);
-        var markGuard = tray.IndexOf("if (!_checkService.MarkNotified(plan, thresholds))", runCheckStart, StringComparison.Ordinal);
-        var clearDate = tray.IndexOf("_settings.LastCheckDate = null;", markGuard, StringComparison.Ordinal);
-        var consolidateDate = tray.IndexOf("_settings.LastCheckDate = completedCheckDate;", markGuard, StringComparison.Ordinal);
+        var markGuard = coordinator.IndexOf("else if (!_checkService.MarkNotified", StringComparison.Ordinal);
+        var clearDate = coordinator.IndexOf("settings.LastCheckDate = null;", markGuard, StringComparison.Ordinal);
+        var consolidateDate = coordinator.IndexOf("settings.LastCheckDate = completedDate;", markGuard, StringComparison.Ordinal);
 
         Assert.True(markStart >= 0, "MarkNotified deve retornar bool.");
         Assert.True(saveFailure > markStart, "Falha ao salvar estado notificado deve retornar false.");
-        Assert.True(markGuard > runCheckStart, "RunCheck deve observar falha de MarkNotified.");
+        Assert.True(markGuard >= 0, "Coordenador deve observar falha de MarkNotified.");
         Assert.True(clearDate > markGuard, "Falha de MarkNotified deve limpar LastCheckDate para retry futuro.");
         Assert.True(consolidateDate > clearDate, "Check do dia so deve consolidar apos MarkNotified bem-sucedido.");
     }
@@ -516,7 +513,7 @@ public sealed class ReleaseContractTests
     public void ProgramAppliesLoggerSettingsBeforeStartupLog()
     {
         var source = File.ReadAllText(Path.Combine(Root, "Program.cs"));
-        var settingsLoadIndex = source.IndexOf("var currentSettings = settingsStore.Load();", StringComparison.Ordinal);
+        var settingsLoadIndex = source.IndexOf("settingsStore.TryLoad(out var currentSettings)", StringComparison.Ordinal);
         var applyIndex = source.IndexOf("logger.ApplySettings(currentSettings);", StringComparison.Ordinal);
         var startupLogIndex = source.IndexOf("logger.Info($\"CertExpiryMonitor v{version} starting", StringComparison.Ordinal);
 

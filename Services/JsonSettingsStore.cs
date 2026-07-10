@@ -17,11 +17,18 @@ public sealed class JsonSettingsStore
 
     private readonly AppPaths _paths;
     private readonly FileLogger _logger;
+    private readonly JsonStoreReadHooks? _readHooks;
 
     public JsonSettingsStore(AppPaths paths, FileLogger logger)
+        : this(paths, logger, readHooks: null)
+    {
+    }
+
+    internal JsonSettingsStore(AppPaths paths, FileLogger logger, JsonStoreReadHooks? readHooks)
     {
         _paths = paths;
         _logger = logger;
+        _readHooks = readHooks;
     }
 
     // Formato atual. Incrementar ao mudar o schema; manter parser legado abaixo.
@@ -33,21 +40,23 @@ public sealed class JsonSettingsStore
         public AppSettings Settings { get; set; } = new AppSettings();
     }
 
-    public AppSettings Load()
+    public bool TryLoad(out AppSettings settings)
     {
+        settings = new AppSettings();
         var hasLock = false;
         try
         {
-            hasLock = FileMutex.WaitOne(FileLockTimeoutMilliseconds);
+            hasLock = _readHooks?.AcquireLock?.Invoke(FileLockTimeoutMilliseconds)
+                ?? FileMutex.WaitOne(FileLockTimeoutMilliseconds);
             if (!hasLock)
             {
                 _logger.Error(new TimeoutException("Settings file lock timeout"), "Failed to acquire settings file lock");
-                return new AppSettings();
+                return false;
             }
 
             if (!File.Exists(_paths.SettingsPath))
             {
-                return new AppSettings();
+                return true;
             }
 
             // Size guard: settings legitimo nunca passa de poucos KB. Se algum
@@ -61,39 +70,41 @@ public sealed class JsonSettingsStore
                     new InvalidDataException($"settings.json too large ({info.Length} bytes); ignoring"),
                     "Settings file exceeded size guard");
                 PreserveCorruptFile(_paths.SettingsPath);
-                return new AppSettings();
+                return false;
             }
 
-            var json = File.ReadAllText(_paths.SettingsPath);
-            return DeserializeSettings(json);
+            var json = (_readHooks?.ReadAllText ?? File.ReadAllText)(_paths.SettingsPath);
+            settings = DeserializeSettings(json);
+            return true;
         }
         catch (JsonException ex)
         {
             _logger.Error(ex, "Failed to read settings");
             PreserveCorruptFile(_paths.SettingsPath);
-            return new AppSettings();
+            return false;
         }
         catch (IOException ex)
         {
             _logger.Error(ex, "Transient IO error while reading settings");
-            return new AppSettings();
+            return false;
         }
         catch (UnauthorizedAccessException ex)
         {
             _logger.Error(ex, "Transient access error while reading settings");
-            return new AppSettings();
+            return false;
         }
         catch (Exception ex)
         {
             _logger.Error(ex, "Failed to read settings");
             PreserveCorruptFile(_paths.SettingsPath);
-            return new AppSettings();
+            return false;
         }
         finally
         {
             if (hasLock)
             {
-                FileMutex.ReleaseMutex();
+                if (_readHooks?.ReleaseLock is { } releaseLock) releaseLock();
+                else FileMutex.ReleaseMutex();
             }
         }
     }
@@ -153,7 +164,8 @@ public sealed class JsonSettingsStore
 
             var envelope = new SettingsFileEnvelope { Version = CurrentSettingsVersion, Settings = settings };
             var json = JsonSerializer.Serialize(envelope, JsonOptions);
-            AtomicWrite(_paths.SettingsPath, json);
+            if (_readHooks?.WriteAtomically is { } writeAtomically) writeAtomically(_paths.SettingsPath, json);
+            else AtomicWrite(_paths.SettingsPath, json);
             return true;
         }
         catch (Exception ex)

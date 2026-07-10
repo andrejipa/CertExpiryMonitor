@@ -13,6 +13,7 @@ namespace CertExpiryMonitor.Services;
 public sealed class DetailsFormOptions
 {
     public required IReadOnlyList<CertificateSnapshot> Certificates { get; init; }
+    public required CertificateReadStatus CertificateReadStatus { get; init; }
     public required IReadOnlyDictionary<string, CertificateStateRecord> State { get; init; }
     public required TimeSpan NotificationTime { get; init; }
     public required bool NotificationSoundEnabled { get; init; }
@@ -24,7 +25,7 @@ public sealed class DetailsFormOptions
     public required Func<DetailsSettingsUpdate, bool> SaveSettings { get; init; }
     public required Func<ExpiryThresholds> GetThresholds { get; init; }
     public required Func<bool> TestNotificationNow { get; init; }
-    public required Func<(IReadOnlyList<CertificateSnapshot>, IReadOnlyDictionary<string, CertificateStateRecord>)> ReloadCertificates { get; init; }
+    public required Func<(CertificateReadResult CertificateRead, IReadOnlyDictionary<string, CertificateStateRecord> State)> ReloadCertificates { get; init; }
     public required FileLogger Logger { get; init; }
     public bool OpenSettingsTab { get; init; }
 
@@ -84,7 +85,7 @@ public sealed class DetailsForm : Form
 
         var grid         = BuildGrid(view);
         var summaryPanel = BuildSummaryPanel(table, view, options.Thresholds, grid);
-        var status       = BuildStatusLabel(options.Certificates.Count);
+        var status       = BuildStatusLabel(options.Certificates.Count, options.CertificateReadStatus);
         var bottom       = BuildBottomPanel(grid, table, view, summaryPanel, status, options);
 
         _certificatesTab = new TabPage("Certificados");
@@ -188,11 +189,11 @@ public sealed class DetailsForm : Form
         return grid;
     }
 
-    private static Label BuildStatusLabel(int count)
+    private static Label BuildStatusLabel(int count, CertificateReadStatus readStatus)
     {
         return new Label
         {
-            Text        = FormatCountLabel(count),
+            Text        = FormatReadStatus(count, readStatus),
             Dock        = DockStyle.Fill,
             TextAlign   = ContentAlignment.MiddleLeft,
             Padding     = new Padding(12, 0, 0, 0),
@@ -209,6 +210,14 @@ public sealed class DetailsForm : Form
         1 => "1 certificado encontrado no usuário atual.",
         _ => $"{count} certificados encontrados no usuário atual."
     };
+
+    private static string FormatReadStatus(int count, CertificateReadStatus readStatus)
+    {
+        var countText = FormatCountLabel(count);
+        return readStatus == CertificateReadStatus.Success
+            ? countText
+            : $"{countText} Atenção: a leitura do repositório foi incompleta; nenhuma verificação diária foi confirmada.";
+    }
 
     internal static bool TryParseDailyTime(string? text, out TimeSpan time)
     {
@@ -526,9 +535,9 @@ public sealed class DetailsForm : Form
                 status.Text     = "Atualizando lista de certificados...";
 
                 var refreshed = await Task.Run(options.ReloadCertificates);
-                FillCertificateTable(table, refreshed.Item1, refreshed.Item2, options.GetThresholds());
+                FillCertificateTable(table, refreshed.CertificateRead.Certificates, refreshed.State, options.GetThresholds());
                 UpdateSummaryItems(summaryPanel, table);
-                status.Text = $"{FormatCountLabel(table.Rows.Count)} Atualizado às {DateTime.Now:HH:mm}.";
+                status.Text = $"{FormatReadStatus(table.Rows.Count, refreshed.CertificateRead.Status)} Atualizado às {DateTime.Now:HH:mm}.";
                 grid.ClearSelection();
                 grid.CurrentCell = null;
                 ApplyRowStyles(grid);

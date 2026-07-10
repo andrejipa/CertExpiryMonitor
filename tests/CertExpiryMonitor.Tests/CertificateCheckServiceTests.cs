@@ -42,6 +42,26 @@ public sealed class CertificateCheckServiceTests : IDisposable
     // Skip por horario configurado
     // -------------------------------------------------------------------------
 
+    [Theory]
+    [InlineData(CertificateReadStatus.StoreFailure)]
+    [InlineData(CertificateReadStatus.PartialFailure)]
+    public void RunCheck_IncompleteCertificateReadDoesNotUpdateFingerprintOrState(CertificateReadStatus readStatus)
+    {
+        var settings = new AppSettings
+        {
+            LastCheckDate = DateOnly.FromDateTime(DateTime.Today.AddDays(-1)),
+            LastCertificateSnapshotHash = "ORIGINAL"
+        };
+        _certReader.ReadResult = new CertificateReadResult([], readStatus, 1);
+
+        var result = _service.RunCheck(true, true, false, settings);
+
+        Assert.Equal(CertificateCheckStatus.ReadFailed, result.Status);
+        Assert.Equal("ORIGINAL", settings.LastCertificateSnapshotHash);
+        Assert.Equal(DateOnly.FromDateTime(DateTime.Today.AddDays(-1)), settings.LastCheckDate);
+        Assert.False(File.Exists(_paths.StatePath));
+    }
+
     [Fact]
     public void RunCheck_SkipsWhenTimeNotReachedAndFlagIsFalse()
     {
@@ -520,14 +540,15 @@ public sealed class CertificateCheckServiceTests : IDisposable
     private sealed class FakeCertificateReader : CertificateReader
     {
         public IReadOnlyList<CertificateSnapshot> Certificates { get; set; } = [];
+        public CertificateReadResult? ReadResult { get; set; }
         public Action? OnRead { get; set; }
 
         public FakeCertificateReader(FileLogger logger) : base(logger) { }
 
-        public override IReadOnlyList<CertificateSnapshot> ReadCurrentUserPersonalCertificates()
+        public override CertificateReadResult ReadCurrentUserPersonalCertificates()
         {
             OnRead?.Invoke();
-            return Certificates;
+            return ReadResult ?? CertificateReadResult.Complete(Certificates);
         }
     }
 }
