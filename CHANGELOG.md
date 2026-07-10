@@ -5,6 +5,117 @@ Todas as mudanças notáveis neste projeto. Formato baseado em
 
 ---
 
+## [Não publicado] — 2026-05-23
+
+### Testes
+
+- **Stryker acima de 70% na camada SQLite/diagnóstico**: reforçados testes de `DiagnosticEventStore`, `DiagnosticRedactor` e `DiagnosticsBundleService` com corrupção/sidecars SQLite, retenção por tamanho, redaction de objetos aninhados, exportação de logs/settings/telemetria e CSV de certificados.
+- **Contratos de release para SQLite**: testes garantem `PublishTrimmed=false`, compressão single-file ativa, native libraries no self-extract e `Microsoft.Data.Sqlite` fixado em `8.0.27`.
+
+### Validação
+
+- Build Release sem warnings, 335 testes passando, Stryker global `71,67%`.
+- Scores por arquivo de diagnóstico: `DiagnosticEventStore.cs` `71,69%`, `DiagnosticRedactor.cs` `84,87%`, `DiagnosticsBundleService.cs` `72,48%`.
+- Publish single-file `win-x64` medido em `artifacts\release-size\sqlite-20260523-124219`: `75,50 MB`, delta `+0,99 MB` (`+1,33%`) contra baseline pré-SQLite `74,51 MB`, abaixo do limite de `77 MB`.
+- BugHunt E2E `-Maximum -KeepArtifacts` validado em `artifacts\bughunt\20260523-124304`.
+
+---
+
+## [1.0.8] — 2026-05-13
+
+### Adicionado
+
+- **Diagnóstico estruturado em SQLite local**: novo `diagnostics.db` registra eventos técnicos mínimos e observações redigidas de certificados para análise posterior em PCs de campo, sem substituir `settings.json`, `certificate-state.json`, `telemetry.json` ou `monitor.log`.
+- **Exportação inclui snapshot consultável do SQLite**: o `.zip` de diagnóstico agora inclui `diagnostics.db`; se o banco estiver bloqueado, a exportação continua e registra o erro em `copy-errors.txt`.
+
+### Corrigido
+
+- **Settings envelope tolera `version` ausente ou malformado**: `JsonSettingsStore` agora detecta a propriedade `settings` por nome case-insensitive e desserializa somente esse bloco. Arquivos como `{ "settings": {...} }` ou `{ "version": "1", "settings": {...} }` não perdem mais as configurações como se fossem formato legado.
+- **State envelope tolera `version` ausente ou malformado**: `JsonStateStore` agora aproveita `records` válido mesmo quando a versão foi editada manualmente como string, sem renomear o estado para `.corrupt-*`.
+- **Telemetria tolera `version` malformado**: `telemetry.json` com `"version": "1"` mantém contadores acumulados e ainda aceita incrementos futuros, em vez de abortar a atualização como se o arquivo estivesse corrompido.
+- **CaptureUi captura quando `MainWindowHandle` fica zero**: o script agora usa `NativeWindowHandle` obtido via UIA como fallback para `PrintWindow`. O BugHunt encontrou janela acessível por UIA, mas sem handle principal exposto pelo processo.
+- **Hash de snapshot ignora duplicatas de thumbprint**: `CertificateCheckService.ComputeSnapshotHash` agora consolida certificados pelo thumbprint normalizado, alinhando o skip diário à mesma regra usada pelo evaluator. Duplicatas no store não fazem o app reprocessar como se o conjunto tivesse mudado.
+- **Documento com texto embutido não é mascarado como CPF/CNPJ**: `CertificateDocumentHelpers.FormatDocument` só formata entradas compostas por dígitos, pontuação comum e espaços. Textos como `CPF 12345678909` permanecem visíveis como entrada malformada.
+- **Titular malformado com dois-pontos no início não vira nome vazio**: `CertificateDocumentHelpers.ParseHolder` agora mantém entradas como `:12345678909` como nome malformado, sem inventar documento para um titular vazio.
+- **CN com espaços antes do atributo é reconhecido**: `GetCommonNameFallback` agora aceita DNs com whitespace inicial antes de `CN=`, mantendo a regra de não capturar `CN=` embutido dentro de outro atributo.
+- **BugHunt tolera task/atalho residual da própria rodada**: `scripts/Run-BugHunt.ps1` remove resíduos que apontam para `CertExpiryMonitor-BugHunt` antes do snapshot, aguarda processos encerrarem antes de remover a pasta e trata `schtasks` ausente por exit code, sem quebrar cleanup por stderr.
+- **Diagnóstico mostra startup apontando para caminho antigo**: o pacote exportado agora grava `TaskSchedulerMatchesCurrentExecutable` e `RegistryMatchesCurrentExecutable`, facilitando identificar PCs onde Task Scheduler/HKCU ainda apontam para outro executável.
+- **Toast em máquina com atalho antigo/quebrado**: o app agora recria sempre o atalho do Menu Iniciar usado pelo Windows Toast, garantindo `AppUserModelID` e caminho do executável atualizados. Antes, um `.lnk` existente mais novo que o `.exe` podia ser aceito como válido mesmo sem o AppUserModelID correto.
+- **BugHunt mais seguro**: o certificado sintético criado em `scripts/Run-BugHunt.ps1` agora usa chave privada não exportável. O teste continua removendo por thumbprint no cleanup, mas reduz o impacto caso a rodada seja interrompida fora do fluxo normal.
+- **Higiene de fonte**: removido byte NUL literal de `StressTests.cs` (`[InlineData("\0")]` agora usa escape textual). Isso evita que o Git trate o arquivo de teste como binário e melhora revisão/diff.
+- **Desinstalação manual mais segura**: `scripts/Uninstall-CurrentUser.ps1` agora recusa `-InstallDirectory` fora de `%LOCALAPPDATA%\Programs` antes de executar `Remove-Item -Recurse -Force`.
+- **Retry de notificação obrigatório**: o app não grava mais `LastCheckDate`/hash antes de saber se a notificação foi exibida. Se o Windows Toast e o fallback falharem, o fingerprint do check é limpo para a próxima rodada tentar de novo no mesmo dia.
+- **BugHunt mais seguro**: o cleanup do `scripts/Run-BugHunt.ps1` agora valida fronteira de diretório com separador antes de qualquer remoção recursiva.
+- **Log JSONL consistente**: quando `LogFormat=Json`, o primeiro log de startup agora respeita JSON antes de escrever `monitor.log`. O BugHunt encontrou mistura de primeira linha texto + linhas JSON.
+- **Instalação remota sem hang**: `scripts/Install-FromUrl.ps1` não usa mais `Start-Process -Wait` para o setup. Agora espera apenas o processo direto do instalador, com timeout, evitando travar quando o setup inicia o app residente na bandeja.
+- **Toast do Windows mais forte e sem som indevido**: o XML agora usa cenário `urgent` sem reintroduzir botões visíveis, e respeita "Tocar som" gerando `<audio silent="true"/>` quando o usuário desativa som.
+- **Clipping no topo da tela de certificados**: o painel de resumo agora tem altura calculada a partir dos cards, filtro e padding, evitando cortar textos em resoluções/DPI menores.
+- **Telemetry anti-DoS**: `telemetry.json` agora tem size guard de 1 MB, preserva arquivo gigante como `.corrupt-*` e evita ler payload local inflado no startup.
+- **Configurações não rearmam aviso sem mudança real**: salvar a tela sem alterar o horário diário não limpa mais `LastCheckDate` nem força nova notificação no mesmo dia.
+- **Remoção de certificados com alerta correto**: certificados a vencer (`Critical`/`Warning`) agora entram no aviso reforçado de remoção porque ainda podem ser usados para assinatura.
+- **Diagnóstico mais resiliente**: exportação continua se `monitor.log` estiver bloqueado, registra `logs/copy-errors.txt` no zip e mostra erro ao usuário se o pacote não puder ser gerado.
+- **Diagnóstico com telemetria bloqueada**: `telemetry.json` agora também é opcional/best-effort no pacote, com `copy-errors.txt` quando o arquivo estiver travado.
+- **Startup/uninstall sem resíduos**: o app limpa `HKCU\Run` quando Task Scheduler já está correto, e o uninstall Inno remove também o fallback de registro.
+- **Scripts de instalação mais defensivos**: uninstall manual só remove a pasta dedicada do app; install manual não escolhe o primeiro exe recursivo; install remoto falha se outra instância fora da instalação atual estiver segurando o mutex.
+- **Instalador sem diretório customizado**: `DisableDirPage=yes` impede escolher uma pasta reaproveitada e reduz risco de uninstall apagar arquivos alheios.
+- **Thumbprint resiliente a caracteres invisíveis**: ao carregar estado ou processar ações de toast, o app remove whitespace e marcas invisíveis comuns (`LRM`/`RLM`/`BOM`) antes de comparar thumbprints.
+- **Instalação manual sem resíduo em falha cedo**: `scripts/Install-CurrentUser.ps1` valida origem e diretório dedicado antes de criar `%LOCALAPPDATA%\Programs\CertExpiryMonitor`, recusando destino fora do caminho esperado.
+- **Preservação de JSON corrompido sem sobrescrita**: `settings.json` e `certificate-state.json` agora usam sufixo único ao renomear para `.corrupt-*`, evitando perder evidência quando duas falhas acontecem no mesmo segundo.
+- **Plano de notificação sem estado obsoleto**: `CertificateCheckService.LastPlan` é limpo em skips, falhas e verificações sem itens, evitando ações tardias sobre um plano antigo.
+- **Thresholds sempre normalizados no evaluator**: `ExpiryEvaluator` normaliza thresholds recebidos diretamente, sem depender de todos os chamadores fazerem isso antes.
+- **Diagnóstico de startup mais tolerante**: parser do CSV do `schtasks` agora ignora linhas de preâmbulo antes do cabeçalho e extrai corretamente `Task To Run`.
+- **CN de certificado com vírgula escapada**: fallback de `CertificateDocumentHelpers.GetCommonNameFallback` agora preserva valores como `CN=EMPRESA\, FILIAL`, evitando truncar titular quando `SimpleName` não estiver disponível.
+- **Telemetria corrompida sem sobrescrita**: `telemetry.json.corrupt-*` também usa sufixo único, alinhado a settings/state e preservando evidências de falhas repetidas.
+- **Scripts manuais param só a instalação alvo**: install/uninstall manuais agora encerram apenas o processo cujo caminho é exatamente `%LOCALAPPDATA%\Programs\CertExpiryMonitor\CertExpiryMonitor.exe`, evitando matar builds de desenvolvimento ou outra cópia em teste.
+- **Diagnóstico fora da pasta ativa do app**: exportação de `.zip` agora recusa destino dentro de `%LOCALAPPDATA%\CertExpiryMonitor`, evitando misturar pacotes gerados com dados/logs ativos.
+- **Persistência resiliente a pasta removida**: logger, settings/state stores e telemetria recriam `%LOCALAPPDATA%\CertExpiryMonitor` antes de gravar, evitando falha se a pasta de dados for apagada durante o uso.
+- **Falha de persistência não expõe plano inválido**: `CertificateCheckService` agora só publica `LastPlan` e atualiza data/hash depois que `certificate-state.json` foi salvo com sucesso.
+- **Settings corrompido com `thresholds:null` não derruba monitoramento**: runtime normaliza thresholds nulos para o padrão seguro antes de avaliar certificados.
+- **Mudança de faixas reavalia no mesmo dia**: salvar novos thresholds limpa `LastCheckDate`/hash e rearma a próxima verificação, evitando que o hash antigo esconda certificados que passaram a entrar na faixa.
+- **Salvar configurações sem estado parcial**: a tela de configurações agora persiste horário, som, faixas, log, EventLog e telemetria em uma única gravação; se falhar, a UI não mostra sucesso nem aplica mudança parcial como se estivesse salva.
+- **Mudança de faixas reavalia imediatamente**: alterar thresholds agenda uma verificação em 1 segundo, mesmo se o horário diário já passou; `_settings` em memória só troca depois que `settings.json` foi salvo.
+- **Retry de rechecagem imediata**: se a verificação forçada por mudança de faixas não conseguir rodar por concorrência, o timer rearma a tentativa em 1 segundo sem perder o reminder forçado.
+- **Retry imediato não é sobrescrito pelo agendamento diário**: `OnTimerTick` agora evita chamar `ScheduleNextDailyCheck()` no `finally` quando já armou retry de 1 segundo.
+- **Toast desabilitado pelo Windows aciona fallback**: antes `ToastNotificationManager.Show()` era tratado como sucesso mesmo se `NotificationSetting` estivesse desabilitado por usuário/política. Agora o app detecta isso e retorna ao popup próprio.
+- **Notificação exibida sem estado salvo não consolida o dia**: `MarkNotified` agora retorna sucesso/falha; se `certificate-state.json` não salvar, o app não persiste `LastCheckDate`/hash como se estivesse tudo certo.
+- **Startup só é persistido depois de aplicar Task Scheduler/HKCU**: alternar "Iniciar com Windows" só salva `settings.json` após registro/remoção bem-sucedido, com rollback best-effort se o save posterior falhar.
+- **Scripts não derrubam instâncias alheias**: `CaptureUi.ps1`, `StressUiCapture.ps1` e install manual agora recusam/limitam processos fora do executável alvo; o Inno também para apenas a instância instalada pelo caminho esperado.
+- **BugHunt restaura argumentos originais**: cleanup de `scripts/Run-BugHunt.ps1` reinicia processos pré-existentes com a linha de comando original, em vez de forçar tudo como `--background`.
+- **BugHunt respeita fronteira de diretório ao restaurar processos**: processos em pastas com prefixo parecido, como `CertExpiryMonitor-BugHunt-Old`, não são confundidos com a instalação temporária da rodada.
+- **Instalação manual espera o processo sair**: `Install-CurrentUser.ps1` agora aguarda a instância instalada encerrar antes de copiar arquivos, evitando falha intermitente por `.exe` ainda bloqueado.
+- **Desinstalação manual espera o processo sair**: `Uninstall-CurrentUser.ps1` agora aguarda a instância instalada encerrar antes de remover a pasta, evitando falha por arquivo ainda bloqueado.
+- **Uninstall Inno com escape PowerShell corrigido**: o bloco `Where-Object` usado para parar apenas a instância instalada não gera mais chave extra no comando.
+- **Diagnóstico de startup sem congelar UI**: `StartupDiagnosticsWindow` consulta `schtasks` fora da thread de UI.
+- **Diagnóstico de startup diferencia falha real de registro**: o botão "Tentar registrar de novo" agora observa o `bool` de `EnsureRegistered()` e mostra erro quando Task Scheduler/HKCU falham.
+- **Fallback fechado não marca certificado como notificado**: fechar o popup próprio com "Fechar aviso"/Esc não consolida `LastCheckDate`; só "Ver detalhes" conta como aviso efetivo.
+- **Rodapé da janela de detalhes com ellipsis**: mensagens longas de status agora indicam truncamento em largura mínima.
+- **Startup não aceita caminho parecido como válido**: a checagem de task registrada agora compara o executável exato, evitando aceitar `CertExpiryMonitor.exe.old` como se fosse o app atual.
+- **Startup em Windows localizado reconhece task válida**: o fallback do parser CSV do `schtasks` agora extrai o campo de comando mais provável em vez de devolver a linha CSV inteira. Isso evita recriar uma task correta quando o cabeçalho `Task To Run` vier traduzido.
+- **Startup com CSV malformado não finge registro válido**: se o parser do `schtasks` não conseguir identificar um comando com `.exe`, agora retorna `null` em vez de uma linha arbitrária, forçando recriação/diagnóstico correto.
+- **Startup rejeita caminho vazio**: builders de Task Scheduler/HKCU agora recusam `null`, vazio ou espaços antes de montar comandos inválidos.
+- **Instalação remota aguarda processo sair**: `scripts/Install-FromUrl.ps1` agora aborta antes de instalar se houver instância fora do destino e espera a instância instalada encerrar antes de chamar o instalador, reduzindo falha intermitente por arquivo ainda bloqueado.
+- **State JSON tolera `records:null`**: envelope válido com lista nula agora carrega como estado vazio sem renomear o arquivo como corrompido.
+- **Toast action tolera espaços em chaves**: parser de argumentos agora normaliza a chave (`action`, `thumbprint`) sem remover espaços codificados do valor.
+- **CN não confunde texto dentro de outro atributo**: fallback de `GetCommonNameFallback` agora só aceita `CN=` no início do DN ou depois de vírgula delimitadora, e respeita vírgulas escapadas.
+- **Snapshot hash ordena thumbprint normalizado**: caracteres invisíveis/espaços em thumbprints não mudam mais a ordem interna do hash do conjunto de certificados.
+- **Evaluator ignora thumbprint vazio**: avaliação, dismiss, restore e mark-notified não criam mais registro de estado com chave vazia.
+- **State store filtra após normalizar**: `certificate-state.json` com thumbprint composto só por caracteres invisíveis não cria mais chave vazia; o save também normaliza/omite registros inválidos.
+- **Diagnóstico de startup não aceita caminho antigo**: a janela agora só considera inicialização registrada quando Task Scheduler/HKCU apontam para o executável atual; entradas antigas aparecem como `REGISTRADO (CAMINHO DIFERENTE)`.
+- **Startup rejeita caminho ambíguo**: builders de Task Scheduler/HKCU recusam aspas e caracteres de controle no caminho do executável antes de montar comandos.
+- **Startup exige separador após exe citado**: comandos como `"CertExpiryMonitor.exe"--background` não são mais aceitos como válidos no diagnóstico.
+- **Toast action decodifica chaves percent-encoded**: parser agora aceita `%61ction=view-details` e mantém fallback seguro quando a chave vem malformada.
+- **Diagnóstico de startup tolera janela fechada durante consulta**: callbacks assíncronos não tentam atualizar controles descartados.
+- **Diagnóstico JSON completo**: logs JSON agora preservam `exception.ToString()` além de tipo/mensagem/stack, mantendo inner exceptions.
+- **UI sem caractere fora do BMP**: `TelemetryWindow` trocou emoji por símbolo BMP para evitar tofu/quadrado em Segoe UI padrão.
+- **CaptureUi mais robusto**: o script espera processos antigos encerrarem e localiza a janela real via UIA/handle antes de capturar.
+
+### Validação
+
+- Build Release sem warnings, 300 testes passando, Stryker `60,84%` com SQLite incluído no mutate filter.
+- BugHunt E2E `-Maximum -KeepArtifacts` validado em `artifacts\bughunt\20260523-041940` com publish isolado, startup, toast/logs, `diagnostics.db`, capturas UIA/PNG e cleanup do certificado/processo.
+
+---
+
 ## [1.0.0] — 2026-05-10
 
 ### UI / UX (validado via screenshots reais)
