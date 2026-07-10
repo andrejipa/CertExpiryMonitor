@@ -237,6 +237,33 @@ public sealed class JsonStateStoreTests : IDisposable
     }
 
     [Fact]
+    public void SaveDuplicateNormalizedThumbprintsKeepsLastRecord()
+    {
+        var state = new Dictionary<string, CertificateStateRecord>
+        {
+            ["first"] = new()
+            {
+                Thumbprint = "AA BB",
+                NotAfter = new DateTime(2026, 6, 30),
+                State = CertificateNotificationState.NotifiedLong
+            },
+            ["second"] = new()
+            {
+                Thumbprint = "AABB",
+                NotAfter = new DateTime(2026, 7, 31),
+                State = CertificateNotificationState.NotifiedShort
+            }
+        };
+
+        Assert.True(_store.Save(state));
+        var loaded = _store.Load();
+
+        var entry = Assert.Single(loaded);
+        Assert.Equal(new DateTime(2026, 7, 31), entry.Value.NotAfter);
+        Assert.Equal(CertificateNotificationState.NotifiedShort, entry.Value.State);
+    }
+
+    [Fact]
     public void BlankThumbprintsAreIgnoredOnLoad()
     {
         var envelopeJson = """

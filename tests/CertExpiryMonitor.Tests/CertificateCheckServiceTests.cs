@@ -526,6 +526,40 @@ public sealed class CertificateCheckServiceTests : IDisposable
         Assert.NotEqual(hash1, hash2);
     }
 
+    [Fact]
+    public void ComputeSnapshotHash_DuplicateThumbprintKeepsLatestExpiration()
+    {
+        var older = Cert("AA", DateTime.Today.AddDays(30));
+        var newer = Cert("AA", DateTime.Today.AddDays(60));
+
+        var duplicateHash = CertificateCheckService.ComputeSnapshotHash([older, newer]);
+        var latestHash = CertificateCheckService.ComputeSnapshotHash([newer]);
+        var olderHash = CertificateCheckService.ComputeSnapshotHash([older]);
+
+        Assert.Equal(latestHash, duplicateHash);
+        Assert.NotEqual(olderHash, duplicateHash);
+    }
+
+    [Theory]
+    [InlineData(CertificateCheckStatus.Skipped, false, false)]
+    [InlineData(CertificateCheckStatus.Completed, true, false)]
+    [InlineData(CertificateCheckStatus.ReadFailed, false, true)]
+    [InlineData(CertificateCheckStatus.StatePersistFailed, false, true)]
+    [InlineData(CertificateCheckStatus.Failed, false, true)]
+    public void CertificateCheckResultExposesRunAndRetrySemantics(
+        CertificateCheckStatus status,
+        bool expectedRan,
+        bool expectedRetry)
+    {
+        var result = new CertificateCheckResult(status);
+
+        Assert.Equal(expectedRan, result.Ran);
+        Assert.Equal(expectedRetry, result.ShouldRetry);
+        var (ran, plan) = result;
+        Assert.Equal(expectedRan, ran);
+        Assert.Null(plan);
+    }
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------

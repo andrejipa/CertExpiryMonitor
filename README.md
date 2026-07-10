@@ -1,13 +1,13 @@
 # CertExpiryMonitor
 
 [![Build and Test](https://github.com/andrejipa/CertExpiryMonitor/actions/workflows/build.yml/badge.svg)](https://github.com/andrejipa/CertExpiryMonitor/actions)
-![Tests](https://img.shields.io/badge/tests-394%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-405%20passing-brightgreen)
 ![.NET](https://img.shields.io/badge/.NET-8.0-512BD4)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)
 
 Aplicativo Windows leve para monitorar certificados digitais A1 no perfil do usuário logado.
 
-> **Status:** 394 testes passando (build limpo, 0 warnings); cobertura `44,88%` de linhas / `52,32%` de branches; Stryker `70,31%`; publish single-file deve permanecer abaixo de 77 MB.
+> **Status:** 405 testes passando (build limpo, 0 warnings); cobertura `44,91%` de linhas / `52,47%` de branches; Stryker `70,08%`; publish single-file deve permanecer abaixo de 77 MB.
 
 **Repositório:** https://github.com/andrejipa/CertExpiryMonitor
 
@@ -124,7 +124,7 @@ Invoke-WebRequest -UseBasicParsing 'https://dot.net/v1/dotnet-install.ps1' -OutF
 
 A pasta `.dotnet-local\` está no `.gitignore`. O CI no GitHub Actions já tem o SDK pré-instalado via `actions/setup-dotnet`.
 
-**Cobertura dos testes (394 casos, todos verdes):**
+**Cobertura dos testes (405 casos, todos verdes):**
 
 | Suite | O que cobre |
 |---|---|
@@ -151,18 +151,18 @@ A pasta `.dotnet-local\` está no `.gitignore`. O CI no GitHub Actions já tem o
 | `DiagnosticEventStoreTests` | SQLite local de diagnóstico: schema, redaction, corrupção, retenção e snapshot consultável |
 | `DiagnosticsBundleServiceTests` | Pacote `.zip` de diagnóstico com logs/métricas, redaction de hash/documento e status de startup com match/mismatch do executável atual |
 
-**Mutation testing (Stryker 4.14.1, relatório `StrykerOutput\2026-07-10.01-55-41`):**
+**Mutation testing (Stryker 4.14.1, relatório `StrykerOutput\2026-07-10.13-16-11`):**
 
 | Arquivo | Score |
 |---|---:|
 | `Services\NotificationCheckCoordinator.cs` | `73,33%` |
 | `Services\CertificateReader.cs` | `53,85%` |
-| Global oficial | `70,31%` |
+| Global oficial | `70,08%` |
 | Baseline preservado, contagem HTML normalizada | `67,90%` |
 
 O score global supera o piso de `70%`. Nos módulos novos, os sobreviventes remanescentes são chamadas/mensagens de observabilidade ou mutações equivalentes; os caminhos funcionais de falha total/parcial, retry, reminder e persistência são cobertos.
 
-**Tamanho do publish single-file v1.0.9 com SQLite:** `75,52 MiB` (`79.183.497` bytes), abaixo do limite de `77 MiB`. Mantidos `PublishTrimmed=false`, `EnableCompressionInSingleFile=true` e `IncludeNativeLibrariesForSelfExtract=true`.
+**Tamanho do publish single-file v1.0.9 com SQLite:** `75,52 MiB` (`79.183.689` bytes), abaixo do limite de `77 MiB`. Mantidos `PublishTrimmed=false`, `EnableCompressionInSingleFile=true` e `IncludeNativeLibrariesForSelfExtract=true`.
 
 ## Exportar diagnostico para analise
 

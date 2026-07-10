@@ -210,6 +210,16 @@ public sealed class ToastAndActivationTests
     }
 
     [Fact]
+    public void ParseArgumentsTrimsWhitespaceAroundEntries()
+    {
+        var parsed = TrayApplicationContext.ParseArguments("  action=view-details  &&  thumbprint=AA  ");
+
+        Assert.Equal("view-details", parsed["action"]);
+        Assert.Equal("AA", parsed["thumbprint"]);
+        Assert.Equal(2, parsed.Count);
+    }
+
+    [Fact]
     public void ParseArgumentsDecodesKeys()
     {
         var parsed = TrayApplicationContext.ParseArguments("%61ction=view-details&thumb%70rint=AA%20BB");

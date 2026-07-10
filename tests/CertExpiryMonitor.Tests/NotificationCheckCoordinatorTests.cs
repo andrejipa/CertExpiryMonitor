@@ -100,6 +100,27 @@ public sealed class NotificationCheckCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public void ConfiguredTimeExactBoundaryRunsCheckDeterministically()
+    {
+        var settingsStore = new JsonSettingsStore(_paths, _logger);
+        Assert.True(settingsStore.Save(new AppSettings { DailyCheckTime = TimeSpan.FromHours(9) }));
+        var stateStore = new JsonStateStore(_paths, _logger);
+        var check = new CertificateCheckService(
+            settingsStore,
+            stateStore,
+            new FixedCertificateReader(_logger, []),
+            new ExpiryEvaluator(),
+            _logger,
+            diagnosticEvents: null,
+            now: () => new DateTime(2026, 7, 10, 9, 0, 0));
+        var coordinator = new NotificationCheckCoordinator(settingsStore, check, _logger);
+
+        var result = coordinator.Run(new CheckCycleRequest(false, false), _ => true);
+
+        Assert.Equal(CheckCycleStatus.CompletedNoDue, result.Status);
+    }
+
+    [Fact]
     public void AcceptedNotificationMarksStateAndClearsForcedReminder()
     {
         var coordinator = CreateCoordinator([DueCertificate()], out var settingsStore, out var stateStore, forceReminder: true);

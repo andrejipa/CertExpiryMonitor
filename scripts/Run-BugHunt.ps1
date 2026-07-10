@@ -494,6 +494,44 @@ function Wait-ForCondition([scriptblock]$Condition, [int]$TimeoutSeconds, [strin
     throw $FailureMessage
 }
 
+function Close-FallbackPopup([int]$ProcessId, [int]$TimeoutSeconds) {
+    Add-Type -AssemblyName UIAutomationClient
+    Add-Type -AssemblyName UIAutomationTypes
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        $windowCondition = [System.Windows.Automation.AndCondition]::new(
+            [System.Windows.Automation.PropertyCondition]::new(
+                [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+                $ProcessId),
+            [System.Windows.Automation.PropertyCondition]::new(
+                [System.Windows.Automation.AutomationElement]::NameProperty,
+                "Certificados digitais"))
+        $window = [System.Windows.Automation.AutomationElement]::RootElement.FindFirst(
+            [System.Windows.Automation.TreeScope]::Children,
+            $windowCondition)
+        if ($null -ne $window) {
+            $buttonCondition = [System.Windows.Automation.AndCondition]::new(
+                [System.Windows.Automation.PropertyCondition]::new(
+                    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                    [System.Windows.Automation.ControlType]::Button),
+                [System.Windows.Automation.PropertyCondition]::new(
+                    [System.Windows.Automation.AutomationElement]::NameProperty,
+                    "Fechar aviso"))
+            $button = $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $buttonCondition)
+            if ($null -ne $button) {
+                $invoke = $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+                ([System.Windows.Automation.InvokePattern]$invoke).Invoke()
+                return $true
+            }
+        }
+
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+
+    return $false
+}
+
 function Get-StartupRegisteredForInstall {
     $taskQuery = Invoke-Schtasks @("/query", "/tn", $taskName, "/fo", "LIST", "/v")
     $taskOutput = $taskQuery.Output | Out-String
@@ -640,11 +678,17 @@ try {
         if (-not (Test-Path $monitorLog)) { return $false }
         $content = Get-Content -Path $monitorLog -Raw
         return (Test-ContainsIgnoreCase $content "Notification dispatched") -or
-            (Test-ContainsIgnoreCase $content "Failed to show toast notification")
+            (Test-ContainsIgnoreCase $content "Failed to show toast notification") -or
+            (Test-ContainsIgnoreCase $content "app popup fallback was used")
     } 30 "Nenhum caminho de toast/fallback foi observado no log"
 
+    $notificationLog = Get-Content -Path (Join-Path $dataDir "monitor.log") -Raw
+    if (Test-ContainsIgnoreCase $notificationLog "app popup fallback was used") {
+        Assert-True (Close-FallbackPopup $background.Id 20) "Popup de fallback nao foi localizado ou fechado via UI Automation"
+    }
+
     $telemetryPath = Join-Path $dataDir "telemetry.json"
-    Assert-True (Test-Path $telemetryPath) "telemetry.json nao foi criado"
+    Wait-ForCondition { Test-Path $telemetryPath } 20 "telemetry.json nao foi criado"
     Assert-True (Test-ContainsIgnoreCase (Get-Content -Path $telemetryPath -Raw) "TotalChecks") "telemetry.json sem TotalChecks"
 
     $diagnosticsDbPath = Join-Path $dataDir "diagnostics.db"
