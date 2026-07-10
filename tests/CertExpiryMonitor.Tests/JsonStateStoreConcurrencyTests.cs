@@ -71,16 +71,20 @@ public sealed class JsonStateStoreConcurrencyTests : IDisposable
     {
         // Uma thread saves continuamente; outra loads continuamente.
         // Sem o mutex, esperaria-se IOException ou JsonException intermitentes.
-        var stopAt = DateTime.UtcNow.AddSeconds(2);
+        using var ready = new CountdownEvent(2);
+        using var start = new ManualResetEventSlim(false);
+        var stopAt = DateTime.MaxValue;
         var saveCount = 0;
         var loadCount = 0;
         Exception? savedException = null;
         Exception? loadedException = null;
 
-        var saver = Task.Run(() =>
+        var saver = Task.Factory.StartNew(() =>
         {
             try
             {
+                ready.Signal();
+                start.Wait();
                 while (DateTime.UtcNow < stopAt)
                 {
                     var state = new Dictionary<string, CertificateStateRecord>(StringComparer.OrdinalIgnoreCase)
@@ -97,12 +101,14 @@ public sealed class JsonStateStoreConcurrencyTests : IDisposable
                 }
             }
             catch (Exception ex) { savedException = ex; }
-        });
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
-        var loader = Task.Run(() =>
+        var loader = Task.Factory.StartNew(() =>
         {
             try
             {
+                ready.Signal();
+                start.Wait();
                 while (DateTime.UtcNow < stopAt)
                 {
                     _store.Load();
@@ -110,7 +116,11 @@ public sealed class JsonStateStoreConcurrencyTests : IDisposable
                 }
             }
             catch (Exception ex) { loadedException = ex; }
-        });
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+        Assert.True(ready.Wait(TimeSpan.FromSeconds(10)), "Threads de concorrencia nao ficaram prontas");
+        stopAt = DateTime.UtcNow.AddSeconds(2);
+        start.Set();
 
         await Task.WhenAll(saver, loader);
 
