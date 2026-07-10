@@ -1,5 +1,6 @@
 using CertExpiryMonitor.Models;
 using CertExpiryMonitor.Services;
+using System.Text.Json;
 using Xunit;
 
 namespace CertExpiryMonitor.Tests;
@@ -35,9 +36,11 @@ public sealed class JsonStateStoreTests : IDisposable
     [Fact]
     public void LoadReturnsEmptyDictionaryWhenFileDoesNotExist()
     {
-        var state = _store.Load();
+        var succeeded = _store.TryLoad(out var state);
 
+        Assert.True(succeeded);
         Assert.Empty(state);
+        Assert.False(File.Exists(_paths.LogPath));
     }
 
     [Fact]
@@ -61,6 +64,18 @@ public sealed class JsonStateStoreTests : IDisposable
         Assert.Equal("AABBCC",                                  entry.Key);
         Assert.Equal(CertificateNotificationState.NotifiedLong,   entry.Value.State);
         Assert.Equal(new DateTime(2026, 6, 30),                 entry.Value.NotAfter);
+        AssertEncryptedStateFileDoesNotExpose("AABBCC", "records", "2026-06-30");
+    }
+
+    [Fact]
+    public void SaveRecreatesMissingDataDirectory()
+    {
+        Directory.Delete(_paths.RootDirectory, recursive: true);
+
+        _store.Save(MakeState(("AABBCC", CertificateNotificationState.NotifiedLong)));
+
+        Assert.True(File.Exists(_paths.StatePath));
+        Assert.True(_store.Load().ContainsKey("AABBCC"));
     }
 
     [Fact]
@@ -130,7 +145,167 @@ public sealed class JsonStateStoreTests : IDisposable
 
         var savedJson = File.ReadAllText(_paths.StatePath);
         Assert.Contains("\"version\"", savedJson, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("\"records\"", savedJson, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("\"format\"", savedJson, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("\"payload\"", savedJson, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("dpapi-current-user", savedJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("\"records\"", savedJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("AABB", savedJson, StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(_paths.StatePath + ".bak"), "Migracao para DPAPI nao deve deixar plaintext em .bak.");
+    }
+
+    [Fact]
+    public void LowercaseEnvelopeFormatIsLoadedCorrectly()
+    {
+        var envelopeJson = """
+            {
+              "version": 1,
+              "records": [
+                { "thumbprint": "AABB", "notAfter": "2026-06-30T00:00:00", "state": 30, "lastNotifiedAt": null }
+              ]
+            }
+            """;
+
+        File.WriteAllText(_paths.StatePath, envelopeJson);
+
+        var state = _store.Load();
+
+        var entry = Assert.Single(state);
+        Assert.Equal("AABB", entry.Key);
+        Assert.Equal(CertificateNotificationState.NotifiedLong, entry.Value.State);
+    }
+
+    [Fact]
+    public void EnvelopeWithoutVersionStillLoadsRecordsProperty()
+    {
+        File.WriteAllText(_paths.StatePath, """
+            {
+              "records": [
+                { "thumbprint": "AABB", "notAfter": "2026-06-30T00:00:00", "state": 30, "lastNotifiedAt": null }
+              ]
+            }
+            """);
+
+        var state = _store.Load();
+
+        var entry = Assert.Single(state);
+        Assert.Equal("AABB", entry.Key);
+        Assert.Equal(CertificateNotificationState.NotifiedLong, entry.Value.State);
+        Assert.Empty(Directory.GetFiles(_tempDir, "certificate-state.json.corrupt-*"));
+    }
+
+    [Fact]
+    public void EnvelopeWithStringVersionStillLoadsRecordsProperty()
+    {
+        File.WriteAllText(_paths.StatePath, """
+            {
+              "version": "1",
+              "records": [
+                { "thumbprint": "CCDD", "notAfter": "2026-07-31T00:00:00", "state": 7, "lastNotifiedAt": null }
+              ]
+            }
+            """);
+
+        var state = _store.Load();
+
+        var entry = Assert.Single(state);
+        Assert.Equal("CCDD", entry.Key);
+        Assert.Equal(CertificateNotificationState.NotifiedShort, entry.Value.State);
+        Assert.Empty(Directory.GetFiles(_tempDir, "certificate-state.json.corrupt-*"));
+    }
+
+    [Fact]
+    public void DuplicateThumbprintsKeepLastRecordFromFile()
+    {
+        var envelopeJson = """
+            {
+              "version": 1,
+              "records": [
+                { "thumbprint": "AA BB", "notAfter": "2026-06-30T00:00:00", "state": 30, "lastNotifiedAt": null },
+                { "thumbprint": "AABB", "notAfter": "2026-07-31T00:00:00", "state": 7, "lastNotifiedAt": null }
+              ]
+            }
+            """;
+
+        File.WriteAllText(_paths.StatePath, envelopeJson);
+
+        var state = _store.Load();
+
+        var entry = Assert.Single(state);
+        Assert.Equal("AABB", entry.Key);
+        Assert.Equal(new DateTime(2026, 7, 31), entry.Value.NotAfter);
+        Assert.Equal(CertificateNotificationState.NotifiedShort, entry.Value.State);
+    }
+
+    [Fact]
+    public void SaveDuplicateNormalizedThumbprintsKeepsLastRecord()
+    {
+        var state = new Dictionary<string, CertificateStateRecord>
+        {
+            ["first"] = new()
+            {
+                Thumbprint = "AA BB",
+                NotAfter = new DateTime(2026, 6, 30),
+                State = CertificateNotificationState.NotifiedLong
+            },
+            ["second"] = new()
+            {
+                Thumbprint = "AABB",
+                NotAfter = new DateTime(2026, 7, 31),
+                State = CertificateNotificationState.NotifiedShort
+            }
+        };
+
+        Assert.True(_store.Save(state));
+        var loaded = _store.Load();
+
+        var entry = Assert.Single(loaded);
+        Assert.Equal(new DateTime(2026, 7, 31), entry.Value.NotAfter);
+        Assert.Equal(CertificateNotificationState.NotifiedShort, entry.Value.State);
+    }
+
+    [Fact]
+    public void BlankThumbprintsAreIgnoredOnLoad()
+    {
+        var envelopeJson = """
+            {
+              "version": 1,
+              "records": [
+                { "thumbprint": "", "notAfter": "2026-06-30T00:00:00", "state": 30, "lastNotifiedAt": null },
+                { "thumbprint": "   ", "notAfter": "2026-07-31T00:00:00", "state": 7, "lastNotifiedAt": null },
+                { "thumbprint": "AABB", "notAfter": "2026-08-31T00:00:00", "state": 1, "lastNotifiedAt": null }
+              ]
+            }
+            """;
+
+        File.WriteAllText(_paths.StatePath, envelopeJson);
+
+        var state = _store.Load();
+
+        var entry = Assert.Single(state);
+        Assert.Equal("AABB", entry.Key);
+        Assert.Equal(CertificateNotificationState.NotifiedUrgent, entry.Value.State);
+    }
+
+    [Fact]
+    public void ThumbprintsThatNormalizeToEmptyAreIgnoredOnLoad()
+    {
+        var envelopeJson = """
+            {
+              "version": 1,
+              "records": [
+                { "thumbprint": "\u200E\u200F\uFEFF\u200B", "notAfter": "2026-06-30T00:00:00", "state": 30, "lastNotifiedAt": null },
+                { "thumbprint": "AABB", "notAfter": "2026-08-31T00:00:00", "state": 1, "lastNotifiedAt": null }
+              ]
+            }
+            """;
+
+        File.WriteAllText(_paths.StatePath, envelopeJson);
+
+        var state = _store.Load();
+
+        var entry = Assert.Single(state);
+        Assert.Equal("AABB", entry.Key);
+        Assert.False(state.ContainsKey(string.Empty));
     }
 
     // -------------------------------------------------------------------------
@@ -154,7 +329,7 @@ public sealed class JsonStateStoreTests : IDisposable
     {
         var legacyJson = """
             [
-              { "Thumbprint": "AA BB CC", "NotAfter": "2026-06-30T00:00:00", "State": 0, "LastNotifiedAt": null }
+              { "Thumbprint": "AA\tBB\u200ECC\r\n", "NotAfter": "2026-06-30T00:00:00", "State": 0, "LastNotifiedAt": null }
             ]
             """;
 
@@ -162,7 +337,57 @@ public sealed class JsonStateStoreTests : IDisposable
 
         var loaded = _store.Load();
 
-        Assert.True(loaded.ContainsKey("AABBCC"), "Chave normalizada deve existir sem espacos");
+        Assert.True(loaded.ContainsKey("AABBCC"), "Chave normalizada deve existir sem whitespace/invisiveis");
+    }
+
+    [Fact]
+    public void NormalizeThumbprintStripsAllFormatCharacters()
+    {
+        var normalized = JsonStateStore.NormalizeThumbprint("AA\u200BBB\u2060CC");
+
+        Assert.Equal("AABBCC", normalized);
+    }
+
+    [Fact]
+    public void SaveOmitsBlankThumbprintsAndNormalizesSavedRecords()
+    {
+        var state = new Dictionary<string, CertificateStateRecord>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["blank"] = new()
+            {
+                Thumbprint = "\u200E\u200F\uFEFF\u200B",
+                NotAfter = new DateTime(2026, 6, 30),
+                State = CertificateNotificationState.NotifiedLong
+            },
+            ["valid"] = new()
+            {
+                Thumbprint = " aa bb ",
+                NotAfter = new DateTime(2026, 8, 31),
+                State = CertificateNotificationState.NotifiedUrgent
+            }
+        };
+
+        Assert.True(_store.Save(state));
+        var json = File.ReadAllText(_paths.StatePath);
+        var loaded = _store.Load();
+
+        var entry = Assert.Single(loaded);
+        Assert.Equal("AABB", entry.Key);
+        Assert.Equal("AABB", entry.Value.Thumbprint);
+        Assert.DoesNotContain(@"""thumbprint"":", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("AABB", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void NormalizeThumbprintThrowsOnNull()
+    {
+        Assert.Throws<ArgumentNullException>(() => JsonStateStore.NormalizeThumbprint(null!));
+    }
+
+    [Fact]
+    public void SaveThrowsOnNullState()
+    {
+        Assert.Throws<ArgumentNullException>(() => _store.Save(null!));
     }
 
     // -------------------------------------------------------------------------
@@ -174,13 +399,73 @@ public sealed class JsonStateStoreTests : IDisposable
     {
         File.WriteAllText(_paths.StatePath, "{ this is not valid json !!!");
 
-        var state = _store.Load();
+        var succeeded = _store.TryLoad(out var state);
 
+        Assert.False(succeeded);
         Assert.Empty(state);
         // O arquivo original nao deve mais existir (foi renomeado para .corrupt-*)
         Assert.False(File.Exists(_paths.StatePath));
         var corruptFiles = Directory.GetFiles(_tempDir, "*.corrupt-*");
         Assert.NotEmpty(corruptFiles);
+    }
+
+    [Fact]
+    public void TransientReadIoErrorReturnsEmptyStateWithoutPreservingAsCorrupt()
+    {
+        Assert.True(_store.Save(MakeState(("AABBCC", CertificateNotificationState.Dismissed))));
+
+        using var locked = new FileStream(_paths.StatePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        var succeeded = _store.TryLoad(out var state);
+
+        Assert.False(succeeded);
+        Assert.Empty(state);
+        Assert.True(File.Exists(_paths.StatePath));
+        Assert.Empty(Directory.GetFiles(_tempDir, "certificate-state.json.corrupt-*"));
+    }
+
+    [Fact]
+    public void InvalidEncryptedStateReturnsEmptyAndPreservesCorruptFile()
+    {
+        File.WriteAllText(_paths.StatePath, """
+            {
+              "version": 2,
+              "format": "dpapi-current-user",
+              "payload": "not-base64"
+            }
+            """);
+
+        var succeeded = _store.TryLoad(out var state);
+
+        Assert.False(succeeded);
+        Assert.Empty(state);
+        Assert.False(File.Exists(_paths.StatePath));
+        Assert.Single(Directory.GetFiles(_tempDir, "certificate-state.json.corrupt-*"));
+    }
+
+    [Fact]
+    public void RepeatedCorruptJsonPreservesEveryCorruptFile()
+    {
+        File.WriteAllText(_paths.StatePath, "{ primeiro state quebrado");
+        Assert.False(_store.TryLoad(out _));
+
+        File.WriteAllText(_paths.StatePath, "{ segundo state quebrado");
+        Assert.False(_store.TryLoad(out _));
+
+        var corruptFiles = Directory.GetFiles(_tempDir, "certificate-state.json.corrupt-*");
+        Assert.Equal(2, corruptFiles.Length);
+    }
+
+    [Fact]
+    public void StateFileAtExactSizeLimitStillLoads()
+    {
+        File.WriteAllText(_paths.StatePath, CreateStateEnvelopeWithExactLength(10_485_760));
+
+        var state = _store.Load();
+
+        var entry = Assert.Single(state);
+        Assert.Equal("EDGE", entry.Key);
+        Assert.True(File.Exists(_paths.StatePath));
+        Assert.Empty(Directory.GetFiles(_tempDir, "certificate-state.json.corrupt-*"));
     }
 
     [Fact]
@@ -191,6 +476,18 @@ public sealed class JsonStateStoreTests : IDisposable
         var state = _store.Load();
 
         Assert.Empty(state);
+    }
+
+    [Fact]
+    public void EnvelopeWithNullRecordsReturnsEmptyState()
+    {
+        File.WriteAllText(_paths.StatePath, """{"version":1,"records":null}""");
+
+        var state = _store.Load();
+
+        Assert.Empty(state);
+        Assert.True(File.Exists(_paths.StatePath));
+        Assert.Empty(Directory.GetFiles(_tempDir, "certificate-state.json.corrupt-*"));
     }
 
     // -------------------------------------------------------------------------
@@ -211,5 +508,43 @@ public sealed class JsonStateStoreTests : IDisposable
             };
         }
         return dict;
+    }
+
+    private void AssertEncryptedStateFileDoesNotExpose(params string[] sensitiveFragments)
+    {
+        var json = File.ReadAllText(_paths.StatePath);
+        using var document = JsonDocument.Parse(json);
+
+        Assert.Equal(JsonValueKind.Object, document.RootElement.ValueKind);
+        Assert.Equal(2, GetProperty(document.RootElement, "version").GetInt32());
+        Assert.Equal("dpapi-current-user", GetProperty(document.RootElement, "format").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(GetProperty(document.RootElement, "payload").GetString()));
+
+        foreach (var fragment in sensitiveFragments)
+        {
+            Assert.DoesNotContain(fragment, json, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    private static JsonElement GetProperty(JsonElement element, string name)
+    {
+        foreach (var property in element.EnumerateObject())
+        {
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                return property.Value;
+            }
+        }
+
+        throw new KeyNotFoundException(name);
+    }
+
+    private static string CreateStateEnvelopeWithExactLength(int length)
+    {
+        const string prefix = "{\"version\":1,\"records\":[{\"thumbprint\":\"EDGE\",\"notAfter\":\"2026-06-30T00:00:00\",\"state\":30,\"lastNotifiedAt\":null}],\"padding\":\"";
+        const string suffix = "\"}";
+        var paddingLength = length - prefix.Length - suffix.Length;
+        Assert.True(paddingLength >= 0);
+        return prefix + new string('x', paddingLength) + suffix;
     }
 }

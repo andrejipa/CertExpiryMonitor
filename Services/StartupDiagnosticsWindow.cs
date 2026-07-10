@@ -38,7 +38,7 @@ public sealed class StartupDiagnosticsWindow : Form
         MinimizeBox     = false;
 
         BuildUi();
-        Refresh_();
+        Shown += async (_, _) => await RefreshAsync();
     }
 
     private void BuildUi()
@@ -88,7 +88,7 @@ public sealed class StartupDiagnosticsWindow : Form
             Size     = new Size(110, 32),
             Anchor   = AnchorStyles.Bottom | AnchorStyles.Left
         };
-        refreshBtn.Click += (_, _) => Refresh_();
+        refreshBtn.Click += async (_, _) => await RefreshAsync();
 
         var registerBtn = new Button
         {
@@ -97,7 +97,7 @@ public sealed class StartupDiagnosticsWindow : Form
             Size     = new Size(180, 32),
             Anchor   = AnchorStyles.Bottom | AnchorStyles.Left
         };
-        registerBtn.Click += (_, _) =>
+        registerBtn.Click += async (_, _) =>
         {
             // Disable durante operacao: EnsureRegistered chama schtasks sincrono
             // (WaitForExit 10s). 10 cliques seguidos = 100s travado na UI thread.
@@ -107,13 +107,28 @@ public sealed class StartupDiagnosticsWindow : Form
             UseWaitCursor        = true;
             try
             {
-                _startup.EnsureRegistered();
-                Refresh_();
-                MessageBox.Show(this,
-                    "Tentativa concluída. Veja o status atualizado abaixo.",
-                    "CertExpiryMonitor",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
+                var registered = await Task.Run(_startup.EnsureRegistered);
+                if (IsDisposed || Disposing) return;
+
+                await RefreshAsync();
+                if (IsDisposed || Disposing) return;
+
+                if (registered)
+                {
+                    MessageBox.Show(this,
+                        "Tentativa concluída. Veja o status atualizado abaixo.",
+                        "CertExpiryMonitor",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                }
+                else
+                {
+                    MessageBox.Show(this,
+                        "Não foi possível registrar. Veja o status atualizado abaixo e o monitor.log para detalhes.",
+                        "CertExpiryMonitor",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                }
             }
             catch (Exception ex)
             {
@@ -126,9 +141,12 @@ public sealed class StartupDiagnosticsWindow : Form
             }
             finally
             {
-                registerBtn.Text    = originalText;
-                registerBtn.Enabled = true;
-                UseWaitCursor       = false;
+                if (!IsDisposed && !registerBtn.IsDisposed)
+                {
+                    registerBtn.Text    = originalText;
+                    registerBtn.Enabled = true;
+                    UseWaitCursor       = false;
+                }
             }
         };
 
@@ -145,9 +163,14 @@ public sealed class StartupDiagnosticsWindow : Form
         Controls.AddRange([titleLabel, description, _statusLabel, _detailsBox, refreshBtn, registerBtn, closeBtn]);
     }
 
-    private void Refresh_()
+    private async Task RefreshAsync()
     {
-        var status = _startup.QueryStatus();
+        _statusLabel.Text = "Consultando inicialização...";
+        _statusLabel.ForeColor = Color.FromArgb(80, 80, 80);
+        _detailsBox.Text = "Aguarde...";
+
+        var status = await Task.Run(_startup.QueryStatus);
+        if (IsDisposed || Disposing) return;
 
         if (status.IsRegistered)
         {
@@ -165,19 +188,28 @@ public sealed class StartupDiagnosticsWindow : Form
             "Executável resolvido:",
             $"   {status.ResolvedExecutablePath}",
             "",
-            $"Task Scheduler (CertExpiryMonitor): {(status.TaskSchedulerRegistered ? "REGISTRADO" : "ausente")}",
+            $"Task Scheduler (CertExpiryMonitor): {FormatRegistrationStatus(status.TaskSchedulerRegistered, status.TaskSchedulerMatchesCurrentExecutable)}",
             status.TaskSchedulerRegistered
                 ? $"   {status.TaskSchedulerCommand}"
                 : "   (consulta `schtasks /query /tn \"CertExpiryMonitor\"` no Prompt do Windows para confirmar)",
             "",
-            $"HKCU\\Run (CertExpiryMonitor): {(status.RegistryRegistered ? "REGISTRADO" : "ausente")}",
+            $"HKCU\\Run (CertExpiryMonitor): {FormatRegistrationStatus(status.RegistryRegistered, status.RegistryMatchesCurrentExecutable)}",
             status.RegistryRegistered
                 ? $"   {status.RegistryCommand}"
                 : "   (consulta `reg query HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v CertExpiryMonitor`)",
             "",
+            "Se aparecer CAMINHO DIFERENTE, clique em \"Tentar registrar de novo\".",
             "Se nenhum dos dois estiver registrado, clique em \"Tentar registrar de novo\".",
             "O log detalhado fica em monitor.log no menu \"Abrir pasta de logs\"."
         };
         _detailsBox.Text = string.Join(Environment.NewLine, lines);
+    }
+
+    private static string FormatRegistrationStatus(bool registered, bool matchesCurrentExecutable)
+    {
+        if (!registered) return "ausente";
+        return matchesCurrentExecutable
+            ? "REGISTRADO"
+            : "REGISTRADO (CAMINHO DIFERENTE)";
     }
 }

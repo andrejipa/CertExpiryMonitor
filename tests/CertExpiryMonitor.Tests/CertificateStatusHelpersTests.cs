@@ -146,4 +146,12 @@ public sealed class CertificateStatusHelpersTests
         // (daysRemaining < 0 sera amanha), mas e Critical (<= Level7).
         Assert.Equal("Critical", CertificateStatusHelpers.GetStatusCategory(0, null, Default()));
     }
+
+    [Fact]
+    public void GetStatusText_AtZeroDaysIsNotExpired()
+    {
+        Assert.Equal(
+            "Próximo do vencimento",
+            CertificateStatusHelpers.GetStatusText(0, null, Default()));
+    }
 }

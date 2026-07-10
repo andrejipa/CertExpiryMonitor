@@ -7,10 +7,15 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build-test:
     # Necessario porque o target e net8.0-windows10.0.19041.0 com UseWindowsForms.
     runs-on: windows-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
@@ -22,10 +27,10 @@ jobs:
           dotnet-version: 8.0.x
 
       - name: Restore (app)
-        run: dotnet restore CertExpiryMonitor.csproj
+        run: dotnet restore CertExpiryMonitor.csproj --locked-mode
 
       - name: Restore (tests)
-        run: dotnet restore tests\CertExpiryMonitor.Tests\CertExpiryMonitor.Tests.csproj
+        run: dotnet restore tests\CertExpiryMonitor.Tests\CertExpiryMonitor.Tests.csproj --locked-mode
 
       - name: Build (Release)
         run: dotnet build CertExpiryMonitor.csproj --configuration Release --no-restore
@@ -45,6 +50,8 @@ jobs:
     # Garante que o publish single-file ainda funciona — protege contra regressao em opcoes do .csproj.
     runs-on: windows-latest
     needs: build-test
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
@@ -55,8 +62,11 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      - name: Restore (locked)
+        run: dotnet restore CertExpiryMonitor.csproj --locked-mode
+
       - name: Publish single-file
-        run: dotnet publish CertExpiryMonitor.csproj --configuration Release --runtime win-x64 --self-contained true /p:PublishSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true --output publish
+        run: dotnet publish CertExpiryMonitor.csproj --configuration Release --runtime win-x64 --self-contained true --no-restore /p:PublishSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true --output publish
 
       - name: Verify executable
         shell: pwsh

@@ -18,6 +18,7 @@ public sealed class AppPaths
         StatePath     = Path.Combine(root, "certificate-state.json");
         LogPath       = Path.Combine(root, "monitor.log");
         TelemetryPath = Path.Combine(root, "telemetry.json");
+        DiagnosticsDbPath = Path.Combine(root, "diagnostics.db");
     }
 
     public string RootDirectory { get; }
@@ -25,4 +26,5 @@ public sealed class AppPaths
     public string StatePath { get; }
     public string LogPath { get; }
     public string TelemetryPath { get; }
+    public string DiagnosticsDbPath { get; }
 }

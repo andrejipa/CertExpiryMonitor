@@ -1,5 +1,5 @@
 #define MyAppName "CertExpiryMonitor"
-#define MyAppVersion "1.0.3"
+#define MyAppVersion "1.0.9"
 #define MyAppPublisher "Escritorio"
 #define MyAppExeName "CertExpiryMonitor.exe"
 
@@ -10,6 +10,7 @@ AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 DefaultDirName={localappdata}\Programs\{#MyAppName}
 DefaultGroupName={#MyAppName}
+DisableDirPage=yes
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir=..\installer-output
@@ -57,8 +58,10 @@ Filename: "{app}\{#MyAppExeName}"; Parameters: "--background"; Description: "Ini
 Filename: "{app}\{#MyAppExeName}"; Parameters: "--background"; Flags: nowait runhidden skipifnotsilent
 
 [UninstallRun]
-Filename: "{cmd}"; Parameters: "/C taskkill /IM ""{#MyAppExeName}"" >NUL 2>NUL & exit /B 0"; Flags: runhidden; RunOnceId: "StopCertExpiryMonitor"
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""Get-Process -Name '{#MyAppName}' -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -ieq '{app}\{#MyAppExeName}' } | Stop-Process -Force -ErrorAction SilentlyContinue"""; Flags: runhidden; RunOnceId: "StopCertExpiryMonitor"
 Filename: "{cmd}"; Parameters: "/C schtasks /delete /tn ""{#MyAppName}"" /f >NUL 2>NUL & exit /B 0"; Flags: runhidden; RunOnceId: "RemoveCertExpiryMonitorTask"
+Filename: "{cmd}"; Parameters: "/C reg delete ""HKCU\Software\Microsoft\Windows\CurrentVersion\Run"" /v ""{#MyAppName}"" /f >NUL 2>NUL & exit /B 0"; Flags: runhidden; RunOnceId: "RemoveCertExpiryMonitorRun"
+Filename: "{cmd}"; Parameters: "/C reg delete ""HKCU\Software\Classes\cert-expiry-monitor"" /f >NUL 2>NUL & exit /B 0"; Flags: runhidden; RunOnceId: "RemoveCertExpiryMonitorProtocol"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
@@ -70,8 +73,8 @@ var
   ResultCode: Integer;
 begin
   Exec(
-    ExpandConstant('{cmd}'),
-    '/C taskkill /IM "{#MyAppExeName}" /F >NUL 2>NUL & exit /B 0',
+    'powershell.exe',
+    '-NoProfile -ExecutionPolicy Bypass -Command "Get-Process -Name ''{#MyAppName}'' -ErrorAction SilentlyContinue | Where-Object { $_.Path -ieq ''' + ExpandConstant('{app}\{#MyAppExeName}') + ''' } | Stop-Process -Force -ErrorAction SilentlyContinue"',
     '',
     SW_HIDE,
     ewWaitUntilTerminated,

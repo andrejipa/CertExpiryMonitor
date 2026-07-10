@@ -93,6 +93,23 @@ public sealed class ExpiryThresholdsTests
         Assert.Equal(once.Level30, twice.Level30);
     }
 
+    [Fact]
+    public void ValuesAboveUiMaximumAreClampedWithoutOverflow()
+    {
+        var t = new ExpiryThresholds
+        {
+            Level1 = int.MaxValue,
+            Level7 = int.MaxValue,
+            Level15 = int.MaxValue,
+            Level30 = int.MaxValue
+        }.Normalized();
+
+        Assert.Equal(ExpiryThresholds.MaximumDays - 3, t.Level1);
+        Assert.Equal(ExpiryThresholds.MaximumDays - 2, t.Level7);
+        Assert.Equal(ExpiryThresholds.MaximumDays - 1, t.Level15);
+        Assert.Equal(ExpiryThresholds.MaximumDays,     t.Level30);
+    }
+
     // -------------------------------------------------------------------------
     // ForBucket — deve retornar o nivel correto para cada bucket
     // -------------------------------------------------------------------------

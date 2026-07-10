@@ -6,14 +6,16 @@ Guia para agentes de IA (Codex, Copilot, Claude etc.) que trabalham neste reposi
 
 Aplicativo Windows de bandeja do sistema (.NET 8 WinForms) que monitora certificados digitais A1
 instalados no repositório `CurrentUser\My` do X.509 e envia notificações toast quando há
-certificados próximos do vencimento. Sem rede, sem admin, sem banco de dados.
+certificados próximos do vencimento. Sem rede, sem admin, sem banco externo; usa SQLite local
+apenas para diagnóstico redigido.
 
 ## Arquitetura em uma linha
 
 `Program.cs` compõe serviços → `TrayApplicationContext` orquestra UI + timer → `CertificateCheckService`
 executa a lógica de verificação → `ExpiryEvaluator` decide quem notificar → `ToastNotifierService`
 exibe o toast → `JsonStateStore` / `JsonSettingsStore` persistem estado em JSON no
-`%LOCALAPPDATA%\CertExpiryMonitor\`.
+`%LOCALAPPDATA%\CertExpiryMonitor\` → `DiagnosticEventStore` registra trilha técnica redigida
+em `diagnostics.db`.
 
 ## Mapa de arquivos críticos
 
@@ -22,21 +24,28 @@ exibe o toast → `JsonStateStore` / `JsonSettingsStore` persistem estado em JSO
 | `Program.cs` | Composição (DI manual), mutex de instância única |
 | `Services/TrayApplicationContext.cs` | Orquestração UI, timer, menu, callbacks do DetailsForm |
 | `Services/CertificateCheckService.cs` | Lógica de verificação, guards de skip (horário/data/hash) |
+| `Services/NotificationCheckCoordinator.cs` | Coordena check → notificação → MarkNotified → persistência; retorna status explícito e retry |
+| `Models/CertificateReadResult.cs` | Resultado da leitura X.509: sucesso, falha do store ou falha parcial |
 | `Services/ExpiryEvaluator.cs` | Decisão de bucket, `BuildPlan` / `BuildReminderPlan` |
-| `Services/ToastNotifierService.cs` | Toast XML via WinRT unpackaged, atalho COM |
+| `Services/ToastNotifierService.cs` | Toast XML via WinRT unpackaged, atalho COM, toast compacto de lembrete |
 | `Services/DetailsForm.cs` | Janela de detalhes + configurações; delega helpers para `CertificateDocumentHelpers` |
 | `Services/CertificateDocumentHelpers.cs` | `FormatDocument`, `ParseHolder`, `GetCommonNameFallback` (interno + testável) |
 | `Services/CertificateStatusHelpers.cs` | `GetStatusText`, `GetStatusCategory` para a grade — recebem `ExpiryThresholds` (interno + testável) |
 | `Services/JsonStateStore.cs` | Lê/salva estado com envelope versionado; suporta formato legado (array puro) |
 | `Services/JsonSettingsStore.cs` | Lê/salva AppSettings |
+| `Services/DiagnosticEventStore.cs` | SQLite local `diagnostics.db`: eventos técnicos mínimos, observações redigidas de certificados, retenção |
+| `Services/DiagnosticRedactor.cs` | Redige detalhes antes de persistir diagnóstico estruturado |
 | `Services/StartupRegistration.cs` | Registra inicialização: Task Scheduler primeiro, HKCU\\Run como fallback |
 | `Services/AppPaths.cs` | Caminhos de dados; aceita `rootOverride` para testes |
 | `Services/FileLogger.cs` | Log rotativo; `Error()` inclui stack trace completo |
+| `Services/DiagnosticsBundleService.cs` | Exporta `.zip` de diagnóstico local com logs, SQLite, métricas, settings redigido, startup e resumo seguro de certificados |
 | `Models/ExpiryThresholds.cs` | Limites configuráveis por faixa; `Normalized()` garante ordering |
 | `Models/AppSettings.cs` | Configurações do usuário, incluindo `Thresholds` |
 | `installer/CertExpiryMonitor.iss` | Inno Setup 6, `PrivilegesRequired=lowest` |
 | `scripts/Install-CurrentUser.ps1` | Instalação manual sem Inno Setup |
+| `scripts/Install-FromUrl.ps1` | Instalação remota; exige HTTPS e SHA256 por padrão, opt-in explícito para exceções |
 | `scripts/Uninstall-CurrentUser.ps1` | Desinstalação manual |
+| `scripts/Run-BugHunt.ps1` | Rodada E2E agressiva: publish isolado, certificado de teste, startup/toast/UI, snapshot e cleanup |
 | `scripts/CaptureUi.ps1` | Automação de captura PNG da UI via `PrintWindow` + dump UIA (Win32 GDI, não exige desktop interativo) |
 | `scripts/GenerateAppIcon.ps1` | Gera o `.ico` do app desenhando programaticamente (7 tamanhos 16-256px) |
 | `assets/CertExpiryMonitor.ico` | Ícone embedded — referenciado em `<ApplicationIcon>` e via `AppIcon.cs` helper |
@@ -46,13 +55,18 @@ exibe o toast → `JsonStateStore` / `JsonSettingsStore` persistem estado em JSO
 | `Models/AppSettings.LogFormat` | Enum `Text`/`Json` para formato do `monitor.log` |
 | `Models/AppSettings.EventLogEnabled` | Espelha ERROR para Windows Event Log |
 | `Models/AppSettings.TelemetryEnabled` | Liga/desliga coleta de telemetria local |
-| `tests/…/ExpiryEvaluatorTests.cs` | 13 testes de lógica de notificação (thresholds padrão) |
+| `tests/…/ExpiryEvaluatorTests.cs` | 19 testes de lógica de notificação (thresholds padrão) |
 | `tests/…/ExpiryEvaluatorThresholdsTests.cs` | Testes com thresholds customizados |
 | `tests/…/JsonStateStoreTests.cs` | Persistência, migração de formato legado, robustez |
 | `tests/…/ExpiryThresholdsTests.cs` | `Normalized()` com valores inválidos / invertidos |
 | `tests/…/CertificateCheckServiceTests.cs` | Guards de skip, hash de snapshot |
+| `tests/…/NotificationCheckCoordinatorTests.cs` | Matriz do ciclo de notificação e falhas de persistência |
+| `tests/…/StoreReadFailureTests.cs` | Timeout/IO dos stores sem sobrescrita de dados válidos |
 | `tests/…/CertificateDocumentHelpersTests.cs` | `FormatDocument` (CPF/CNPJ), `ParseHolder`, `GetCommonNameFallback` |
 | `tests/…/CertificateStatusHelpersTests.cs` | `GetStatusText` e `GetStatusCategory` — thresholds padrão e customizados, boundaries, estados Dismissed/Notified |
+| `tests/…/PropertyBasedTests.cs` | FsCheck fuzz/property tests de parsing, thresholds, stores JSON, helpers e toast XML |
+| `tests/…/DiagnosticEventStoreTests.cs` | Garante schema SQLite, redaction, corrupção, retenção e snapshot |
+| `tests/…/DiagnosticsBundleServiceTests.cs` | Garante pacote de diagnóstico, SQLite e redaction de hash/documento |
 
 ## Flags de linha de comando
 
@@ -70,7 +84,10 @@ exibe o toast → `JsonStateStore` / `JsonSettingsStore` persistem estado em JSO
 - **Certificado expirado** (daysRemaining < 0) **não notifica** — o usuário já perdeu o prazo.
 - **Hash de snapshot**: SHA-256 dos thumbprints+NotAfter ordenados; se igual ao do último check no mesmo dia, o check é pulado.
 - **Instância única**: mutex `Local\CertExpiryMonitor.CurrentUser`. Segunda instância sinaliza a primeira via `EventWaitHandle`.
-- **Toast com 5 botões no máximo** (limitação do Windows Action Center).
+- **Toast compacto**: evitar botões visíveis no toast; o corpo do aviso abre a janela de detalhes.
+- **Sem aviso duplicado**: usar popup próprio topmost apenas como fallback se o Windows rejeitar o toast.
+- **Diagnóstico exportado** deve ser local e redigido: nunca exportar chave privada, PFX, senha, thumbprint puro, subject completo ou documento completo de titular.
+- **SQLite local não é fonte de verdade**: `diagnostics.db` é apenas histórico técnico; settings/state continuam nos JSONs.
 
 ## Convenções de código
 
@@ -97,6 +114,17 @@ dotnet test "tests/CertExpiryMonitor.Tests/CertExpiryMonitor.Tests.csproj"
 Para cobertura:
 ```bash
 dotnet test --collect:"XPlat Code Coverage" --results-directory coverage
+```
+
+Para mutation testing local:
+```bash
+dotnet tool restore
+dotnet tool run dotnet-stryker
+```
+
+Para bug hunt E2E agressivo no Windows real:
+```bash
+powershell -ExecutionPolicy Bypass -File .\scripts\Run-BugHunt.ps1 -Maximum -KeepArtifacts
 ```
 
 ## Riscos conhecidos / backlog técnico
@@ -137,6 +165,10 @@ Estes itens já apareceram em auditorias anteriores e foram **explicitamente rej
 
 | Item | Solução |
 |---|---|
+| Falha transitória de settings/state virava vazio/default salvável | Stores usam `TryLoad`; chamadores abortam mutações e checks fazem retry em 5 minutos. |
+| Falha do store X.509 virava check vazio bem-sucedido | `CertificateReadResult` distingue sucesso, falha total e parcial; checks incompletos não consolidam fingerprint. |
+| Fluxo de notificação preso ao TrayApplicationContext | Extraído para `NotificationCheckCoordinator`, coberto por testes sem WinForms. |
+| Retenção/VACUUM em cada evento SQLite | `RunMaintenance` explícito executado em worker fora do caminho de INSERT. |
 | Thresholds hardcoded no DetailsForm (`<= 7`, `<= 30`) | Extraído para `CertificateStatusHelpers`; usa `ExpiryThresholds.Level7`/`Level30` normalizado. |
 | Summary panel não atualizava ao salvar thresholds | Callback `onThresholdsSaved` reclassifica linhas + refaz cores e contagens. |
 | `AppPaths.IDisposable` vestigial | Removido; `Program.cs` usa `var paths`. |

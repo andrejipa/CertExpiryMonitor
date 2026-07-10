@@ -12,6 +12,7 @@ dotnet-install.ps1
 # Screenshots de UI capturados por scripts/CaptureUi.ps1
 ui-shots/
 ui-shots-*/
+Captura de tela*.png
 
 # Previews gerados por scripts/preview-icon.ps1 (o .ico final fica versionado)
 assets/preview-*.png
@@ -23,6 +24,10 @@ installer-output/
 coverage/
 *.coverage
 *.coveragexml
+
+# Bug hunt / mutation / smoke artifacts
+artifacts/
+StrykerOutput/
 
 # IDE
 .vs/

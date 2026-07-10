@@ -34,12 +34,33 @@ public sealed class CertificateCheckServiceTests : IDisposable
 
     public void Dispose()
     {
+        try { if (File.Exists(_tempDir)) File.Delete(_tempDir); } catch { /* best-effort */ }
         try { Directory.Delete(_tempDir, recursive: true); } catch { /* best-effort */ }
     }
 
     // -------------------------------------------------------------------------
     // Skip por horario configurado
     // -------------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(CertificateReadStatus.StoreFailure)]
+    [InlineData(CertificateReadStatus.PartialFailure)]
+    public void RunCheck_IncompleteCertificateReadDoesNotUpdateFingerprintOrState(CertificateReadStatus readStatus)
+    {
+        var settings = new AppSettings
+        {
+            LastCheckDate = DateOnly.FromDateTime(DateTime.Today.AddDays(-1)),
+            LastCertificateSnapshotHash = "ORIGINAL"
+        };
+        _certReader.ReadResult = new CertificateReadResult([], readStatus, 1);
+
+        var result = _service.RunCheck(true, true, false, settings);
+
+        Assert.Equal(CertificateCheckStatus.ReadFailed, result.Status);
+        Assert.Equal("ORIGINAL", settings.LastCertificateSnapshotHash);
+        Assert.Equal(DateOnly.FromDateTime(DateTime.Today.AddDays(-1)), settings.LastCheckDate);
+        Assert.False(File.Exists(_paths.StatePath));
+    }
 
     [Fact]
     public void RunCheck_SkipsWhenTimeNotReachedAndFlagIsFalse()
@@ -124,6 +145,26 @@ public sealed class CertificateCheckServiceTests : IDisposable
         Assert.True(ran);
     }
 
+    [Fact]
+    public void RunCheck_DoesNotSkipWhenIgnoreLastCheckDateIsTrueEvenWithSameSnapshotHash()
+    {
+        _certReader.Certificates = [Cert("SAMEHASH", DateTime.Today.AddDays(30))];
+        var settings = new AppSettings
+        {
+            DailyCheckTime = TimeSpan.Zero,
+            LastCheckDate = DateOnly.FromDateTime(DateTime.Today),
+            LastCertificateSnapshotHash = CertificateCheckService.ComputeSnapshotHash(_certReader.Certificates)
+        };
+
+        var (ran, _) = _service.RunCheck(
+            ignoreConfiguredTime: true,
+            ignoreLastCheckDate:  true,
+            forceReminder:        false,
+            settings:             settings);
+
+        Assert.True(ran);
+    }
+
     // -------------------------------------------------------------------------
     // Snapshot hash invalida skip quando store muda (cenario novo via fake reader)
     // -------------------------------------------------------------------------
@@ -158,6 +199,7 @@ public sealed class CertificateCheckServiceTests : IDisposable
         Assert.NotNull(plan);
         Assert.Single(plan!.DueCertificates);
         Assert.Equal("CC", plan.DueCertificates[0].Certificate.Thumbprint);
+        Assert.Same(plan, _service.LastPlan);
     }
 
     [Fact]
@@ -171,6 +213,138 @@ public sealed class CertificateCheckServiceTests : IDisposable
 
         Assert.True(ran);
         Assert.Null(plan);  // Ran=true mas Plan=null porque HasItems=false
+        Assert.Null(_service.LastPlan);
+    }
+
+    [Fact]
+    public void RunCheck_ClearsLastPlanWhenLaterCheckHasNoItems()
+    {
+        _certReader.Certificates = [Cert("DUE", DateTime.Today.AddDays(5))];
+        var firstSettings = new AppSettings { DailyCheckTime = TimeSpan.Zero };
+
+        var (_, firstPlan) = _service.RunCheck(true, true, false, firstSettings);
+        Assert.NotNull(firstPlan);
+        Assert.NotNull(_service.LastPlan);
+
+        _certReader.Certificates = [Cert("FAR", DateTime.Today.AddDays(365))];
+        var secondSettings = new AppSettings { DailyCheckTime = TimeSpan.Zero };
+
+        var (ran, secondPlan) = _service.RunCheck(true, true, false, secondSettings);
+
+        Assert.True(ran);
+        Assert.Null(secondPlan);
+        Assert.Null(_service.LastPlan);
+    }
+
+    [Fact]
+    public void RunCheck_ClearsLastPlanWhenSkippedByConfiguredTime()
+    {
+        _certReader.Certificates = [Cert("DUE", DateTime.Today.AddDays(5))];
+        var firstSettings = new AppSettings { DailyCheckTime = TimeSpan.Zero };
+        _service.RunCheck(true, true, false, firstSettings);
+        Assert.NotNull(_service.LastPlan);
+
+        var skipSettings = new AppSettings { DailyCheckTime = TimeSpan.FromHours(48) };
+        var (ran, plan) = _service.RunCheck(false, false, false, skipSettings);
+
+        Assert.False(ran);
+        Assert.Null(plan);
+        Assert.Null(_service.LastPlan);
+    }
+
+    [Fact]
+    public void RunCheck_ClearsLastPlanWhenCertificateReaderFails()
+    {
+        _certReader.Certificates = [Cert("DUE", DateTime.Today.AddDays(5))];
+        var firstSettings = new AppSettings { DailyCheckTime = TimeSpan.Zero };
+        _service.RunCheck(true, true, false, firstSettings);
+        Assert.NotNull(_service.LastPlan);
+
+        _certReader.OnRead = () => throw new InvalidOperationException("falha sintetica");
+        var failSettings = new AppSettings { DailyCheckTime = TimeSpan.Zero };
+        var (ran, plan) = _service.RunCheck(true, true, false, failSettings);
+
+        Assert.False(ran);
+        Assert.Null(plan);
+        Assert.Null(_service.LastPlan);
+    }
+
+    [Fact]
+    public void RunCheck_DoesNotExposeLastPlanWhenStateSaveFails()
+    {
+        _certReader.Certificates = [Cert("DUE", DateTime.Today.AddDays(5))];
+        var firstSettings = new AppSettings { DailyCheckTime = TimeSpan.Zero };
+        _service.RunCheck(true, true, false, firstSettings);
+        Assert.NotNull(_service.LastPlan);
+
+        File.Delete(_paths.StatePath);
+        Directory.CreateDirectory(_paths.StatePath);
+
+        var failSettings = new AppSettings { DailyCheckTime = TimeSpan.Zero };
+        var (ran, plan) = _service.RunCheck(true, true, false, failSettings);
+
+        Assert.False(ran);
+        Assert.Null(plan);
+        Assert.Null(_service.LastPlan);
+        Assert.Null(failSettings.LastCheckDate);
+        Assert.Equal(string.Empty, failSettings.LastCertificateSnapshotHash);
+    }
+
+    [Fact]
+    public void RunCheck_TreatsNullThresholdsAsDefaultSettings()
+    {
+        _certReader.Certificates = [Cert("NULLTHRESHOLDS", DateTime.Today.AddDays(5))];
+        var settings = new AppSettings { DailyCheckTime = TimeSpan.Zero, Thresholds = null! };
+
+        var (ran, plan) = _service.RunCheck(true, true, false, settings);
+
+        Assert.True(ran);
+        var item = Assert.Single(plan!.DueCertificates);
+        Assert.Equal("NULLTHRESHOLDS", item.Certificate.Thumbprint);
+    }
+
+    [Fact]
+    public void RunCheck_UsesCustomThresholdsFromSettings()
+    {
+        _certReader.Certificates = [Cert("CUSTOMTHRESHOLDS", DateTime.Today.AddDays(20))];
+        var settings = new AppSettings
+        {
+            DailyCheckTime = TimeSpan.Zero,
+            Thresholds = new ExpiryThresholds { Level30 = 10, Level15 = 7, Level7 = 3, Level1 = 1 }
+        };
+
+        var (ran, plan) = _service.RunCheck(true, true, false, settings);
+
+        Assert.True(ran);
+        Assert.Null(plan);
+    }
+
+    [Fact]
+    public void RunCheck_ForceReminderIncludesAlreadyNotifiedCertificate()
+    {
+        var certificate = Cert("REMINDER", DateTime.Today.AddDays(5));
+        _certReader.Certificates = [certificate];
+        _stateStore.Save(new Dictionary<string, CertificateStateRecord>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["REMINDER"] = new CertificateStateRecord
+            {
+                Thumbprint = "REMINDER",
+                NotAfter = certificate.NotAfter,
+                State = CertificateNotificationState.NotifiedShort,
+                LastNotifiedAt = DateTimeOffset.Now.AddHours(-1)
+            }
+        });
+
+        var normalSettings = new AppSettings { DailyCheckTime = TimeSpan.Zero };
+        var (_, normalPlan) = _service.RunCheck(true, true, false, normalSettings);
+        Assert.Null(normalPlan);
+
+        var reminderSettings = new AppSettings { DailyCheckTime = TimeSpan.Zero };
+        var (ran, reminderPlan) = _service.RunCheck(true, true, true, reminderSettings);
+
+        Assert.True(ran);
+        var item = Assert.Single(reminderPlan!.DueCertificates);
+        Assert.Equal("REMINDER", item.Certificate.Thumbprint);
     }
 
     // -------------------------------------------------------------------------
@@ -280,6 +454,19 @@ public sealed class CertificateCheckServiceTests : IDisposable
     }
 
     [Fact]
+    public void ComputeSnapshotHash_OrdersByNormalizedThumbprint()
+    {
+        var a = Cert("AA", DateTime.Today.AddDays(30));
+        var b = Cert("BB", DateTime.Today.AddDays(60));
+        var aWithWhitespace = Cert(" AA ", a.NotAfter);
+
+        var hash1 = CertificateCheckService.ComputeSnapshotHash([b, aWithWhitespace]);
+        var hash2 = CertificateCheckService.ComputeSnapshotHash([a, b]);
+
+        Assert.Equal(hash1, hash2);
+    }
+
+    [Fact]
     public void ComputeSnapshotHash_DifferentCertificatesProduceDifferentHashes()
     {
         var a = Cert("AA", DateTime.Today.AddDays(30));
@@ -304,6 +491,30 @@ public sealed class CertificateCheckServiceTests : IDisposable
     }
 
     [Fact]
+    public void ComputeSnapshotHash_IgnoresDuplicateThumbprints()
+    {
+        var certificate = Cert("AABBCC", DateTime.Today.AddDays(30));
+        var duplicate = Cert(" aa bb cc ", certificate.NotAfter);
+
+        var hash1 = CertificateCheckService.ComputeSnapshotHash([certificate]);
+        var hash2 = CertificateCheckService.ComputeSnapshotHash([certificate, duplicate]);
+
+        Assert.Equal(hash1, hash2);
+    }
+
+    [Fact]
+    public void ComputeSnapshotHash_IgnoresBlankThumbprints()
+    {
+        var certificate = Cert("AABBCC", DateTime.Today.AddDays(30));
+        var blank = Cert(" \t\r\n\u200E", DateTime.Today.AddDays(5));
+
+        var hash1 = CertificateCheckService.ComputeSnapshotHash([certificate]);
+        var hash2 = CertificateCheckService.ComputeSnapshotHash([blank, certificate]);
+
+        Assert.Equal(hash1, hash2);
+    }
+
+    [Fact]
     public void ComputeSnapshotHash_ChangeInNotAfterChangesHash()
     {
         var a = Cert("AA", DateTime.Today.AddDays(30));
@@ -313,6 +524,40 @@ public sealed class CertificateCheckServiceTests : IDisposable
         var hash2 = CertificateCheckService.ComputeSnapshotHash([b]);
 
         Assert.NotEqual(hash1, hash2);
+    }
+
+    [Fact]
+    public void ComputeSnapshotHash_DuplicateThumbprintKeepsLatestExpiration()
+    {
+        var older = Cert("AA", DateTime.Today.AddDays(30));
+        var newer = Cert("AA", DateTime.Today.AddDays(60));
+
+        var duplicateHash = CertificateCheckService.ComputeSnapshotHash([older, newer]);
+        var latestHash = CertificateCheckService.ComputeSnapshotHash([newer]);
+        var olderHash = CertificateCheckService.ComputeSnapshotHash([older]);
+
+        Assert.Equal(latestHash, duplicateHash);
+        Assert.NotEqual(olderHash, duplicateHash);
+    }
+
+    [Theory]
+    [InlineData(CertificateCheckStatus.Skipped, false, false)]
+    [InlineData(CertificateCheckStatus.Completed, true, false)]
+    [InlineData(CertificateCheckStatus.ReadFailed, false, true)]
+    [InlineData(CertificateCheckStatus.StatePersistFailed, false, true)]
+    [InlineData(CertificateCheckStatus.Failed, false, true)]
+    public void CertificateCheckResultExposesRunAndRetrySemantics(
+        CertificateCheckStatus status,
+        bool expectedRan,
+        bool expectedRetry)
+    {
+        var result = new CertificateCheckResult(status);
+
+        Assert.Equal(expectedRan, result.Ran);
+        Assert.Equal(expectedRetry, result.ShouldRetry);
+        var (ran, plan) = result;
+        Assert.Equal(expectedRan, ran);
+        Assert.Null(plan);
     }
 
     // -------------------------------------------------------------------------
@@ -329,14 +574,15 @@ public sealed class CertificateCheckServiceTests : IDisposable
     private sealed class FakeCertificateReader : CertificateReader
     {
         public IReadOnlyList<CertificateSnapshot> Certificates { get; set; } = [];
+        public CertificateReadResult? ReadResult { get; set; }
         public Action? OnRead { get; set; }
 
         public FakeCertificateReader(FileLogger logger) : base(logger) { }
 
-        public override IReadOnlyList<CertificateSnapshot> ReadCurrentUserPersonalCertificates()
+        public override CertificateReadResult ReadCurrentUserPersonalCertificates()
         {
             OnRead?.Invoke();
-            return Certificates;
+            return ReadResult ?? CertificateReadResult.Complete(Certificates);
         }
     }
 }

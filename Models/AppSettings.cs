@@ -21,6 +21,13 @@ public sealed class AppSettings
     public string LastCertificateSnapshotHash { get; set; } = string.Empty;
     public ExpiryThresholds Thresholds { get; set; } = new();
 
+    /// <summary>
+    /// Quando verdadeiro, a proxima verificacao deve incluir certificados ja
+    /// notificados. Usado apos mudanca de faixas/horario e persistido para
+    /// sobreviver a restart antes do timer imediato.
+    /// </summary>
+    public bool ForceNextNotificationReminder { get; set; } = false;
+
     /// <summary>Formato do arquivo de log. Default: texto humano-legivel.</summary>
     public LogFormat LogFormat { get; set; } = LogFormat.Text;
 

@@ -54,6 +54,16 @@ public sealed class ExpiryEvaluatorTests
     }
 
     [Fact]
+    public void CertificateExpiringTodayNotifiesBucket1()
+    {
+        var plan = BuildPlan(Certificate("A", 0));
+
+        var item = Assert.Single(plan.DueCertificates);
+        Assert.Equal(ExpiryBucket.Days1, item.Bucket);
+        Assert.Equal(0, item.DaysRemaining);
+    }
+
+    [Fact]
     public void ExpiredCertificateDoesNotNotify()
     {
         var plan = BuildPlan(Certificate("A", -1));
@@ -104,6 +114,16 @@ public sealed class ExpiryEvaluatorTests
     }
 
     [Fact]
+    public void DismissCertificateIgnoresBlankThumbprint()
+    {
+        var state = EmptyState();
+
+        _evaluator.DismissCertificate(" \t\r\n", state);
+
+        Assert.Empty(state);
+    }
+
+    [Fact]
     public void RestoreCertificateClearsDismissedState()
     {
         var state = StateWith("A", CertificateNotificationState.Dismissed);
@@ -111,6 +131,16 @@ public sealed class ExpiryEvaluatorTests
         _evaluator.RestoreCertificate("A", state);
 
         Assert.Equal(CertificateNotificationState.None, state["A"].State);
+    }
+
+    [Fact]
+    public void RestoreCertificateIgnoresBlankThumbprint()
+    {
+        var state = EmptyState();
+
+        _evaluator.RestoreCertificate(" \t\r\n", state);
+
+        Assert.Empty(state);
     }
 
     [Fact]
@@ -125,6 +155,17 @@ public sealed class ExpiryEvaluatorTests
             Today);
 
         Assert.Single(plan.DueCertificates);
+    }
+
+    [Fact]
+    public void BuildPlanIgnoresBlankThumbprint()
+    {
+        var state = EmptyState();
+
+        var plan = _evaluator.BuildPlan([Certificate(" \t\r\n", 30)], state, Today);
+
+        Assert.Empty(plan.DueCertificates);
+        Assert.Empty(state);
     }
 
     [Fact]
@@ -149,6 +190,43 @@ public sealed class ExpiryEvaluatorTests
         _evaluator.MarkNotified(plan, state, DateTimeOffset.Now);
 
         Assert.Equal(CertificateNotificationState.Dismissed, state["A"].State);
+    }
+
+    [Fact]
+    public void MarkNotifiedIgnoresBlankThumbprint()
+    {
+        var state = EmptyState();
+        var plan = new NotificationPlan
+        {
+            DueCertificates =
+            [
+                new CertificateDueNotification(Certificate(" \t\r\n", 15), ExpiryBucket.Days15, 15)
+            ]
+        };
+
+        _evaluator.MarkNotified(plan, state, DateTimeOffset.Now);
+
+        Assert.Empty(state);
+    }
+
+    [Fact]
+    public void PublicMethodsThrowOnNullArguments()
+    {
+        var state = EmptyState();
+        var plan = new NotificationPlan();
+
+        Assert.Throws<ArgumentNullException>(() => _evaluator.BuildPlan(null!, state, Today));
+        Assert.Throws<ArgumentNullException>(() => _evaluator.BuildPlan([], null!, Today));
+        Assert.Throws<ArgumentNullException>(() => _evaluator.BuildReminderPlan(null!, state, Today));
+        Assert.Throws<ArgumentNullException>(() => _evaluator.BuildReminderPlan([], null!, Today));
+        Assert.Throws<ArgumentNullException>(() => _evaluator.MarkNotified(null!, state, DateTimeOffset.Now));
+        Assert.Throws<ArgumentNullException>(() => _evaluator.MarkNotified(plan, null!, DateTimeOffset.Now));
+        Assert.Throws<ArgumentNullException>(() => _evaluator.DismissCertificate(null!, state));
+        Assert.Throws<ArgumentNullException>(() => _evaluator.DismissCertificate("A", null!));
+        Assert.Throws<ArgumentNullException>(() => _evaluator.DismissCertificates(null!, state));
+        Assert.Throws<ArgumentNullException>(() => _evaluator.DismissCertificates([], null!));
+        Assert.Throws<ArgumentNullException>(() => _evaluator.RestoreCertificate(null!, state));
+        Assert.Throws<ArgumentNullException>(() => _evaluator.RestoreCertificate("A", null!));
     }
 
     private NotificationPlan BuildPlan(

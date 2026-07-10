@@ -66,6 +66,18 @@ public sealed class CertificateDocumentHelpersTests
         Assert.Equal("ABC-XYZ", CertificateDocumentHelpers.FormatDocument("ABC-XYZ"));
     }
 
+    [Fact]
+    public void FormatDocument_TextWithEmbeddedCpfDigitsReturnsOriginal()
+    {
+        Assert.Equal("CPF 12345678909", CertificateDocumentHelpers.FormatDocument("CPF 12345678909"));
+    }
+
+    [Fact]
+    public void FormatDocument_TextWithEmbeddedCnpjDigitsReturnsOriginal()
+    {
+        Assert.Equal("CNPJ 12345678000195", CertificateDocumentHelpers.FormatDocument("CNPJ 12345678000195"));
+    }
+
     // -------------------------------------------------------------------------
     // ParseHolder
     // -------------------------------------------------------------------------
@@ -85,6 +97,24 @@ public sealed class CertificateDocumentHelpersTests
         var (name, doc) = CertificateDocumentHelpers.ParseHolder("MARIA APARECIDA");
 
         Assert.Equal("MARIA APARECIDA", name);
+        Assert.Equal(string.Empty, doc);
+    }
+
+    [Fact]
+    public void ParseHolder_LeadingColonKeepsMalformedValueAsName()
+    {
+        var (name, doc) = CertificateDocumentHelpers.ParseHolder(":12345678909");
+
+        Assert.Equal(":12345678909", name);
+        Assert.Equal(string.Empty, doc);
+    }
+
+    [Fact]
+    public void ParseHolder_TrailingColonKeepsNameAndEmptyDocument()
+    {
+        var (name, doc) = CertificateDocumentHelpers.ParseHolder("JOAO DA SILVA:");
+
+        Assert.Equal("JOAO DA SILVA", name);
         Assert.Equal(string.Empty, doc);
     }
 
@@ -120,6 +150,14 @@ public sealed class CertificateDocumentHelpersTests
     }
 
     [Fact]
+    public void GetCommonNameFallback_CnWithLeadingWhitespace_ExtractsCnValue()
+    {
+        var cn = CertificateDocumentHelpers.GetCommonNameFallback("   CN=JOAO DA SILVA, OU=PF A1");
+
+        Assert.Equal("JOAO DA SILVA", cn);
+    }
+
+    [Fact]
     public void GetCommonNameFallback_CnAtEnd_ExtractsCnValue()
     {
         var cn = CertificateDocumentHelpers.GetCommonNameFallback("O=ICP-Brasil, CN=MARIA JOSE");
@@ -137,10 +175,43 @@ public sealed class CertificateDocumentHelpersTests
     }
 
     [Fact]
+    public void GetCommonNameFallback_DoesNotMatchCnInsideAnotherAttribute()
+    {
+        var input = "O=EMPRESA CN=FANTASIA, OU=AC";
+        var cn = CertificateDocumentHelpers.GetCommonNameFallback(input);
+
+        Assert.Equal(input, cn);
+    }
+
+    [Fact]
+    public void GetCommonNameFallback_MatchesCnAfterAttributeSeparatorWithWhitespace()
+    {
+        var cn = CertificateDocumentHelpers.GetCommonNameFallback("O=ICP-Brasil,   CN=MARIA JOSE");
+
+        Assert.Equal("MARIA JOSE", cn);
+    }
+
+    [Fact]
     public void GetCommonNameFallback_CaseInsensitive()
     {
         var cn = CertificateDocumentHelpers.GetCommonNameFallback("cn=NOME TESTE, O=ORG");
 
         Assert.Equal("NOME TESTE", cn);
+    }
+
+    [Fact]
+    public void GetCommonNameFallback_PreservesEscapedCommaInsideCn()
+    {
+        var cn = CertificateDocumentHelpers.GetCommonNameFallback(@"CN=EMPRESA\, FILIAL:12345678000195, OU=PF A1, O=ICP-Brasil");
+
+        Assert.Equal("EMPRESA, FILIAL:12345678000195", cn);
+    }
+
+    [Fact]
+    public void GetCommonNameFallback_HandlesEscapedBackslashBeforeDelimiter()
+    {
+        var cn = CertificateDocumentHelpers.GetCommonNameFallback(@"CN=EMPRESA\\, O=ICP-Brasil");
+
+        Assert.Equal(@"EMPRESA\", cn);
     }
 }

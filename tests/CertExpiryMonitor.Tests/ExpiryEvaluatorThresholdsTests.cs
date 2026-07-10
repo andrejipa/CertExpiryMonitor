@@ -79,6 +79,37 @@ public sealed class ExpiryEvaluatorThresholdsTests
         }
     }
 
+    [Fact]
+    public void BuildPlanNormalizesInvertedThresholds()
+    {
+        var thresholds = new ExpiryThresholds { Level1 = 30, Level7 = -5, Level15 = 3, Level30 = 1 };
+
+        var plan = _evaluator.BuildPlan([Cert("A", 33)], EmptyState(), Today, thresholds);
+
+        var item = Assert.Single(plan.DueCertificates);
+        Assert.Equal(ExpiryBucket.Days30, item.Bucket);
+    }
+
+    [Fact]
+    public void ReminderPlanNormalizesInvertedThresholds()
+    {
+        var thresholds = new ExpiryThresholds { Level1 = 30, Level7 = -5, Level15 = 3, Level30 = 1 };
+        var state = new Dictionary<string, CertificateStateRecord>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["A"] = new()
+            {
+                Thumbprint = "A",
+                NotAfter   = Today.ToDateTime(TimeOnly.MinValue).AddDays(33),
+                State      = CertificateNotificationState.NotifiedLong
+            }
+        };
+
+        var plan = _evaluator.BuildReminderPlan([Cert("A", 33)], state, Today, thresholds);
+
+        var item = Assert.Single(plan.DueCertificates);
+        Assert.Equal(ExpiryBucket.Days30, item.Bucket);
+    }
+
     // -------------------------------------------------------------------------
     // Progresso entre buckets com thresholds customizados
     // -------------------------------------------------------------------------
