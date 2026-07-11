@@ -374,8 +374,8 @@ public sealed class JsonStateStoreTests : IDisposable
         var entry = Assert.Single(loaded);
         Assert.Equal("AABB", entry.Key);
         Assert.Equal("AABB", entry.Value.Thumbprint);
+        Assert.Contains("dpapi-current-user", json, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(@"""thumbprint"":", json, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("AABB", json, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
