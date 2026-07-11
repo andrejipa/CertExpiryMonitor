@@ -173,7 +173,7 @@ A pasta `.dotnet-local\` está no `.gitignore`. O CI no GitHub Actions já tem o
 
 O score global supera o piso de `70%`. Janelas WinForms/WinRT ficam fora do filtro e sao validadas por integracao STA/BugHunt. Exclusoes locais do Stryker documentam apenas observabilidade e contratos fisicos nao observaveis em memoria; os caminhos funcionais continuam no escopo.
 
-**Tamanho do publish single-file v1.0.10 com SQLite:** aferido no gate de empacotamento e mantido abaixo do limite de `77 MiB`. Mantidos `PublishTrimmed=false`, `EnableCompressionInSingleFile=true` e `IncludeNativeLibrariesForSelfExtract=true`.
+**Tamanho do publish single-file v1.0.10 com SQLite:** `75,52 MiB` (`79.187.228` bytes), abaixo do limite de `77 MiB`; instalador Inno Setup `70,32 MiB` (`73.736.900` bytes). Mantidos `PublishTrimmed=false`, `EnableCompressionInSingleFile=true` e `IncludeNativeLibrariesForSelfExtract=true`.
 
 ## Exportar diagnostico para analise
 

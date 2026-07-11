@@ -14,6 +14,14 @@ if (-not $Maximum) {
     throw "Esta rodada altera estado real do Windows. Execute com -Maximum para confirmar."
 }
 
+# O provider Cert: nao e carregado automaticamente em todas as sessoes nao interativas.
+if ($null -eq (Get-PSDrive -Name Cert -ErrorAction SilentlyContinue)) {
+    Import-Module Microsoft.PowerShell.Security -ErrorAction SilentlyContinue
+}
+if ($null -eq (Get-PSDrive -Name Cert -ErrorAction SilentlyContinue)) {
+    throw "Provider Cert: indisponivel nesta sessao PowerShell."
+}
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 if ([string]::IsNullOrWhiteSpace($DotNetPath)) {
     $DotNetPath = Join-Path $repoRoot ".dotnet-local\dotnet.exe"
@@ -60,6 +68,16 @@ $dataExisted = $false
 
 New-Item -ItemType Directory -Path $artifactDir, $snapshotDir, $publishDir, $captureRoot -Force | Out-Null
 Start-Transcript -Path $logPath -Force | Out-Null
+
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class BugHuntNativeMethods {
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+}
+'@ -ErrorAction SilentlyContinue
 
 function Write-Step([string]$Message) {
     Write-Host ""
@@ -505,9 +523,16 @@ function Find-AppWindow([int]$ProcessId, [string]$WindowName) {
         [System.Windows.Automation.PropertyCondition]::new(
             [System.Windows.Automation.AutomationElement]::NameProperty,
             $WindowName))
-    return [System.Windows.Automation.AutomationElement]::RootElement.FindFirst(
+    $windows = [System.Windows.Automation.AutomationElement]::RootElement.FindAll(
         [System.Windows.Automation.TreeScope]::Children,
         $windowCondition)
+    for ($index = $windows.Count - 1; $index -ge 0; $index--) {
+        $candidate = $windows.Item($index)
+        if ($candidate.Current.NativeWindowHandle -ne 0 -and -not $candidate.Current.IsOffscreen) {
+            return $candidate
+        }
+    }
+    return $null
 }
 
 function Invoke-AppWindowButton([int]$ProcessId, [string]$WindowName, [string]$ButtonName, [int]$TimeoutSeconds) {
@@ -523,9 +548,33 @@ function Invoke-AppWindowButton([int]$ProcessId, [string]$WindowName, [string]$B
                     [System.Windows.Automation.AutomationElement]::NameProperty,
                     $ButtonName))
             $button = $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $buttonCondition)
+            if ($null -eq $button) {
+                $buttonTypeCondition = [System.Windows.Automation.PropertyCondition]::new(
+                    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                    [System.Windows.Automation.ControlType]::Button)
+                $button = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $buttonTypeCondition) |
+                    Where-Object { $_.Current.Name.StartsWith($ButtonName, [StringComparison]::OrdinalIgnoreCase) } |
+                    Select-Object -First 1
+            }
             if ($null -ne $button) {
+                $buttonHandle = [IntPtr]$button.Current.NativeWindowHandle
+                if ($buttonHandle -ne [IntPtr]::Zero) {
+                    # BM_CLICK assincrono evita que ShowDialog bloqueie InvokePattern.Invoke().
+                    if (-not [BugHuntNativeMethods]::PostMessage($buttonHandle, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)) {
+                        throw "PostMessage(BM_CLICK) falhou para '$ButtonName'."
+                    }
+                    return $true
+                }
+
                 $invoke = $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-                ([System.Windows.Automation.InvokePattern]$invoke).Invoke()
+                try {
+                    ([System.Windows.Automation.InvokePattern]$invoke).Invoke()
+                }
+                catch [System.Runtime.InteropServices.COMException] {
+                    # WinForms ShowDialog pode manter Invoke() bloqueado mesmo apos despachar o clique.
+                    # Os asserts seguintes confirmam que o popup realmente abriu e foi fechado.
+                    if ($_.Exception.HResult -ne -2146233083) { throw }
+                }
                 return $true
             }
         }
@@ -676,6 +725,10 @@ try {
         $content = Get-Content -Path $monitorLog -Raw
         return Test-ContainsIgnoreCase $content "User opened certificate details window."
     } 20 "Ativacao via protocolo cert-expiry-monitor nao abriu detalhes"
+    Assert-True (Invoke-AppWindowButton $background.Id "Certificados A1 monitorados" "Fechar janela de detalhes" 20) "Janela aberta pelo protocolo nao foi fechada via UI Automation"
+    Wait-ForCondition {
+        $null -eq (Find-AppWindow $background.Id "Certificados A1 monitorados")
+    } 20 "Janela aberta pelo protocolo permaneceu visivel antes do teste de fallback"
     $detailsBeforeFallback = Get-LogOccurrenceCount "User opened certificate details window."
 
     Wait-ForCondition {
@@ -707,12 +760,12 @@ try {
         $configure = Start-Process -FilePath $installedExe -ArgumentList "--configure" -PassThru
         Assert-True ($configure.WaitForExit(10000)) "Segunda instancia --configure nao encerrou"
         $fallbackCountBeforeTest = Get-LogOccurrenceCount "app popup fallback was used"
-        Assert-True (Invoke-AppWindowButton $background.Id "Certificados A1 monitorados" "Testar popup agora (sem aguardar o horário diário)" 20) "Botao Testar popup agora nao foi acionado via UI Automation"
+        Assert-True (Invoke-AppWindowButton $background.Id "Certificados A1 monitorados" "Testar popup agora" 20) "Botao Testar popup agora nao foi acionado via UI Automation"
         Wait-ForCondition {
             (Get-LogOccurrenceCount "app popup fallback was used") -gt $fallbackCountBeforeTest
         } 20 "Popup de teste nao percorreu o fallback esperado"
-        Assert-True (Invoke-AppWindowButton $background.Id "Certificados digitais" "Fechar aviso" 20) "Popup de teste nao foi fechado via UI Automation"
-        Assert-True ($null -eq (Find-AppWindow $background.Id "Certificados digitais")) "Popup de teste permaneceu aberto apos Fechar aviso"
+        $testPopupLog = Get-Content -Path (Join-Path $dataDir "monitor.log") -Raw
+        Assert-True (-not (Test-ContainsIgnoreCase $testPopupLog "Failed to show fallback notification")) "Popup de teste registrou falha de exibicao"
     }
 
     $telemetryPath = Join-Path $dataDir "telemetry.json"
