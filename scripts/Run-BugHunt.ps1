@@ -494,22 +494,26 @@ function Wait-ForCondition([scriptblock]$Condition, [int]$TimeoutSeconds, [strin
     throw $FailureMessage
 }
 
-function Close-FallbackPopup([int]$ProcessId, [int]$TimeoutSeconds) {
+function Find-AppWindow([int]$ProcessId, [string]$WindowName) {
     Add-Type -AssemblyName UIAutomationClient
     Add-Type -AssemblyName UIAutomationTypes
 
+    $windowCondition = [System.Windows.Automation.AndCondition]::new(
+        [System.Windows.Automation.PropertyCondition]::new(
+            [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+            $ProcessId),
+        [System.Windows.Automation.PropertyCondition]::new(
+            [System.Windows.Automation.AutomationElement]::NameProperty,
+            $WindowName))
+    return [System.Windows.Automation.AutomationElement]::RootElement.FindFirst(
+        [System.Windows.Automation.TreeScope]::Children,
+        $windowCondition)
+}
+
+function Invoke-AppWindowButton([int]$ProcessId, [string]$WindowName, [string]$ButtonName, [int]$TimeoutSeconds) {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     do {
-        $windowCondition = [System.Windows.Automation.AndCondition]::new(
-            [System.Windows.Automation.PropertyCondition]::new(
-                [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
-                $ProcessId),
-            [System.Windows.Automation.PropertyCondition]::new(
-                [System.Windows.Automation.AutomationElement]::NameProperty,
-                "Certificados digitais"))
-        $window = [System.Windows.Automation.AutomationElement]::RootElement.FindFirst(
-            [System.Windows.Automation.TreeScope]::Children,
-            $windowCondition)
+        $window = Find-AppWindow $ProcessId $WindowName
         if ($null -ne $window) {
             $buttonCondition = [System.Windows.Automation.AndCondition]::new(
                 [System.Windows.Automation.PropertyCondition]::new(
@@ -517,7 +521,7 @@ function Close-FallbackPopup([int]$ProcessId, [int]$TimeoutSeconds) {
                     [System.Windows.Automation.ControlType]::Button),
                 [System.Windows.Automation.PropertyCondition]::new(
                     [System.Windows.Automation.AutomationElement]::NameProperty,
-                    "Fechar aviso"))
+                    $ButtonName))
             $button = $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $buttonCondition)
             if ($null -ne $button) {
                 $invoke = $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
@@ -530,6 +534,13 @@ function Close-FallbackPopup([int]$ProcessId, [int]$TimeoutSeconds) {
     } while ((Get-Date) -lt $deadline)
 
     return $false
+}
+
+function Get-LogOccurrenceCount([string]$Needle) {
+    $monitorLog = Join-Path $dataDir "monitor.log"
+    if (-not (Test-Path $monitorLog)) { return 0 }
+    $content = Get-Content -Path $monitorLog -Raw
+    return ([regex]::Matches($content, [regex]::Escape($Needle), [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)).Count
 }
 
 function Get-StartupRegisteredForInstall {
@@ -665,6 +676,7 @@ try {
         $content = Get-Content -Path $monitorLog -Raw
         return Test-ContainsIgnoreCase $content "User opened certificate details window."
     } 20 "Ativacao via protocolo cert-expiry-monitor nao abriu detalhes"
+    $detailsBeforeFallback = Get-LogOccurrenceCount "User opened certificate details window."
 
     Wait-ForCondition {
         $monitorLog = Join-Path $dataDir "monitor.log"
@@ -684,7 +696,23 @@ try {
 
     $notificationLog = Get-Content -Path (Join-Path $dataDir "monitor.log") -Raw
     if (Test-ContainsIgnoreCase $notificationLog "app popup fallback was used") {
-        Assert-True (Close-FallbackPopup $background.Id 20) "Popup de fallback nao foi localizado ou fechado via UI Automation"
+        Assert-True (Invoke-AppWindowButton $background.Id "Certificados digitais" "Ver detalhes" 20) "Popup de fallback nao abriu detalhes via UI Automation"
+        Wait-ForCondition {
+            (Get-LogOccurrenceCount "User opened certificate details window.") -gt $detailsBeforeFallback
+        } 20 "Clique em Ver detalhes no fallback nao abriu a janela"
+        Assert-True ($null -eq (Find-AppWindow $background.Id "Certificados digitais")) "Popup de fallback permaneceu aberto apos Ver detalhes"
+        $isolatedProcesses = @(Get-Process -Name $appName -ErrorAction SilentlyContinue | Where-Object { Test-ProcessPathEquals $_.Path $installedExe })
+        Assert-True ($isolatedProcesses.Count -eq 1) "Fallback abriu instancia duplicada do app"
+
+        $configure = Start-Process -FilePath $installedExe -ArgumentList "--configure" -PassThru
+        Assert-True ($configure.WaitForExit(10000)) "Segunda instancia --configure nao encerrou"
+        $fallbackCountBeforeTest = Get-LogOccurrenceCount "app popup fallback was used"
+        Assert-True (Invoke-AppWindowButton $background.Id "Certificados A1 monitorados" "Testar popup agora (sem aguardar o horário diário)" 20) "Botao Testar popup agora nao foi acionado via UI Automation"
+        Wait-ForCondition {
+            (Get-LogOccurrenceCount "app popup fallback was used") -gt $fallbackCountBeforeTest
+        } 20 "Popup de teste nao percorreu o fallback esperado"
+        Assert-True (Invoke-AppWindowButton $background.Id "Certificados digitais" "Fechar aviso" 20) "Popup de teste nao foi fechado via UI Automation"
+        Assert-True ($null -eq (Find-AppWindow $background.Id "Certificados digitais")) "Popup de teste permaneceu aberto apos Fechar aviso"
     }
 
     $telemetryPath = Join-Path $dataDir "telemetry.json"

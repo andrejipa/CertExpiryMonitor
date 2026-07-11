@@ -59,7 +59,9 @@ public sealed class ReleaseContractTests
         var script = File.ReadAllText(Path.Combine(Root, "scripts", "Run-BugHunt.ps1"));
 
         Assert.Contains("app popup fallback was used", script, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("Close-FallbackPopup $background.Id", script, StringComparison.Ordinal);
+        Assert.Contains("Invoke-AppWindowButton $background.Id \"Certificados digitais\" \"Ver detalhes\"", script, StringComparison.Ordinal);
+        Assert.Contains("Invoke-AppWindowButton $background.Id \"Certificados digitais\" \"Fechar aviso\"", script, StringComparison.Ordinal);
+        Assert.Contains("Fallback abriu instancia duplicada do app", script, StringComparison.Ordinal);
         Assert.Contains("\"Fechar aviso\"", script, StringComparison.Ordinal);
         Assert.Contains("Wait-ForCondition { Test-Path $telemetryPath }", script, StringComparison.Ordinal);
         Assert.Contains("Nenhum caminho de toast/fallback foi observado no log", script, StringComparison.Ordinal);
