@@ -18,6 +18,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly ToastNotifierService _notifier;
     private readonly StartupRegistration _startup;
     private readonly TelemetryService _telemetry;
+    private readonly CertificateStateActions _stateActions;
     private readonly DiagnosticsBundleService _diagnostics;
     private readonly DiagnosticEventStore _diagnosticEvents;
     private readonly FileLogger _logger;
@@ -31,7 +32,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     private bool _forceNextScheduledNotification;
     private bool _ignoreConfiguredTimeOnNextTimer;
 
-    public TrayApplicationContext(
+    internal TrayApplicationContext(
         string[] args,
         EventWaitHandle activationEvent,
         EventWaitHandle configurationEvent,
@@ -44,6 +45,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         ToastNotifierService notifier,
         StartupRegistration startup,
         TelemetryService telemetry,
+        CertificateStateActions stateActions,
         DiagnosticsBundleService diagnostics,
         FileLogger logger,
         AppPaths paths,
@@ -60,6 +62,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         _notifier = notifier;
         _startup = startup;
         _telemetry = telemetry;
+        _stateActions = stateActions;
         _diagnostics = diagnostics;
         _diagnosticEvents = diagnosticEvents;
         _logger = logger;
@@ -585,26 +588,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private bool TryDismissOne(string thumbprint)
     {
-        if (!_stateStore.TryLoad(out var state))
-        {
-            _logger.Error(new IOException("certificate-state.json read failed"), "Failed to dismiss certificate because state could not be read");
-            return false;
-        }
-        _expiryEvaluator.DismissCertificate(thumbprint, state);
-        if (!_stateStore.Save(state))
-        {
-            _logger.Error(new IOException("certificate-state.json save failed"), $"Failed to dismiss certificate {ShortThumbprint(thumbprint)}");
-            return false;
-        }
-
-        _telemetry.Increment(t => t.DismissOne++);
-        _logger.Info($"User dismissed certificate {ShortThumbprint(thumbprint)}.");
-        _diagnosticEvents.RecordInfo(
-            "certificate.dismiss_one",
-            "TrayApplicationContext",
-            "Usuario marcou certificado para nao lembrar.",
-            new { thumbprint });
-        return true;
+        return _stateActions.DismissOne(thumbprint);
     }
 
     private void DismissAllCurrent()
@@ -612,51 +596,12 @@ public sealed class TrayApplicationContext : ApplicationContext
         var lastPlan = _checkService.LastPlan;
         if (lastPlan is null) return;
 
-        if (!_stateStore.TryLoad(out var state))
-        {
-            _logger.Error(new IOException("certificate-state.json read failed"), "Failed to dismiss current certificates because state could not be read");
-            return;
-        }
-        _expiryEvaluator.DismissCertificates(
-            lastPlan.DueCertificates.Select(item => item.Certificate.Thumbprint),
-            state);
-        if (!_stateStore.Save(state))
-        {
-            _logger.Error(new IOException("certificate-state.json save failed"), "Failed to dismiss all certificates from current notification");
-            return;
-        }
-
-        _telemetry.Increment(t => t.DismissAll++);
-        _logger.Info("User dismissed all certificates from current notification.");
-        _diagnosticEvents.RecordInfo(
-            "certificate.dismiss_all",
-            "TrayApplicationContext",
-            "Usuario marcou todos os certificados da notificacao atual para nao lembrar.",
-            new { count = lastPlan.DueCertificates.Count });
+        _ = _stateActions.DismissAll(lastPlan.DueCertificates.Select(item => item.Certificate.Thumbprint));
     }
 
     private void DismissAll(IEnumerable<string> thumbprints)
     {
-        var thumbprintList = thumbprints.ToArray();
-        if (!_stateStore.TryLoad(out var state))
-        {
-            _logger.Error(new IOException("certificate-state.json read failed"), "Failed to dismiss toast certificates because state could not be read");
-            return;
-        }
-        _expiryEvaluator.DismissCertificates(thumbprintList, state);
-        if (!_stateStore.Save(state))
-        {
-            _logger.Error(new IOException("certificate-state.json save failed"), "Failed to dismiss all certificates from toast action");
-            return;
-        }
-
-        _telemetry.Increment(t => t.DismissAll++);
-        _logger.Info("User dismissed all certificates from toast action.");
-        _diagnosticEvents.RecordInfo(
-            "certificate.dismiss_all",
-            "TrayApplicationContext",
-            "Usuario marcou certificados do toast para nao lembrar.",
-            new { count = thumbprintList.Length });
+        _ = _stateActions.DismissAll(thumbprints);
     }
 
     // -------------------------------------------------------------------------
@@ -801,26 +746,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private bool RestoreOne(string thumbprint)
     {
-        if (!_stateStore.TryLoad(out var state))
-        {
-            _logger.Error(new IOException("certificate-state.json read failed"), "Failed to restore certificate because state could not be read");
-            return false;
-        }
-        _expiryEvaluator.RestoreCertificate(thumbprint, state);
-        if (!_stateStore.Save(state))
-        {
-            _logger.Error(new IOException("certificate-state.json save failed"), $"Failed to restore certificate {ShortThumbprint(thumbprint)}");
-            return false;
-        }
-
-        _telemetry.Increment(t => t.Restore++);
-        _logger.Info($"User restored certificate {ShortThumbprint(thumbprint)}.");
-        _diagnosticEvents.RecordInfo(
-            "certificate.restore",
-            "TrayApplicationContext",
-            "Usuario voltou a lembrar certificado.",
-            new { thumbprint });
-        return true;
+        return _stateActions.RestoreOne(thumbprint);
     }
 
     private bool RemoveCertificate(string thumbprint)

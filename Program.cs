@@ -85,6 +85,7 @@ internal static class Program
         var notifier = new ToastNotifierService(logger);
         var startup = new StartupRegistration(logger);
         var telemetry = new TelemetryService(paths, logger);
+        var stateActions = new CertificateStateActions(stateStore, expiryEvaluator, telemetry, logger, diagnosticEvents);
         var diagnostics = new DiagnosticsBundleService(paths, startup, certificateReader, logger, diagnosticEvents);
 
         if (settingsAvailable)
@@ -112,6 +113,7 @@ internal static class Program
             notifier,
             startup,
             telemetry,
+            stateActions,
             diagnostics,
             logger,
             paths,
