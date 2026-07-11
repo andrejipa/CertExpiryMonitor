@@ -25,6 +25,12 @@ em `diagnostics.db`.
 | `Services/TrayApplicationContext.cs` | Orquestração UI, timer, menu, callbacks do DetailsForm |
 | `Services/CertificateCheckService.cs` | Lógica de verificação, guards de skip (horário/data/hash) |
 | `Services/NotificationCheckCoordinator.cs` | Coordena check → notificação → MarkNotified → persistência; retorna status explícito e retry |
+| `Services/NotificationPresenter.cs` | Encapsula toast/fallback e registra o canal de notificacao usado |
+| `Services/FallbackNotificationWindow.cs` | UI WinForms isolada do popup proprio de fallback |
+| `Services/ToastActionDispatcher.cs` | Despacha ativacoes do protocolo para detalhes/dismiss |
+| `Services/SettingsUpdateCoordinator.cs` | Atualiza configuracoes sem promover falha de leitura a defaults salvaveis |
+| `Services/CertificateStateActions.cs` | Persiste dismiss/restore com telemetria e diagnostico |
+| `Services/DurableFileWriter.cs` | Escrita atomica duravel compartilhada por settings/state/telemetria |
 | `Models/CertificateReadResult.cs` | Resultado da leitura X.509: sucesso, falha do store ou falha parcial |
 | `Services/ExpiryEvaluator.cs` | Decisão de bucket, `BuildPlan` / `BuildReminderPlan` |
 | `Services/ToastNotifierService.cs` | Toast XML via WinRT unpackaged, atalho COM, toast compacto de lembrete |
@@ -141,7 +147,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-BugHunt.ps1 -Maximum -Kee
 | Item | Impacto | Observação |
 |---|---|---|
 | ~~`CertificateNotificationState` enum semantic~~ | Resolvido | Valores `Notified30/15/7/1` renomeados para `NotifiedLong/Medium/Short/Urgent`. Valores numéricos do enum (30, 15, 7, 1, 999) preservados para compat JSON. |
-| Testes de UI (DetailsForm, TrayApplicationContext) ausentes | Médio | UI WinForms difícil de testar sem headless runner. Mitigado parcialmente pela extração para helpers testáveis (`CertificateStatusHelpers`, `CertificateDocumentHelpers`). |
+| Automacao direta de `TrayApplicationContext` limitada | Baixo | `DetailsForm` possui integracao STA; o host da bandeja e coberto pelos colaboradores extraidos e pelo BugHunt/UIA em Windows real. |
 | ~~Race mutex/events em `Program.cs`~~ | Verificado | Falso positivo. `AutoReset` sem waiter mantém estado signaled até alguém esperar (Win32 spec). `HandleActivationRequests` drena via `WaitOne(0)` no timer 500ms. Sinal não é perdido. |
 | `JsonStateStore`/`JsonSettingsStore` temp-file não-fsync | Baixo | `File.Move` em primeira escrita não força flush; crash brusco do SO pode perder o arquivo. Próximo save recria. |
 | `.bak` files em `%LOCALAPPDATA%\CertExpiryMonitor` | Baixo | `File.Replace` sobrescreve a cada save — máximo 2 arquivos. Não acumulam, mas tampouco são removidos. |
