@@ -52,9 +52,9 @@ internal sealed class NotificationPresenter
         if (shown)
         {
             _diagnosticEvents?.RecordInfo(
-                "notification.shown",
+                "notification.toast_submitted",
                 nameof(NotificationPresenter),
-                "Notificacao toast do Windows exibida.",
+                "Notificacao toast submetida ao Windows.",
                 new { channel = "windows_toast", due_count = plan.DueCertificates.Count });
             return new NotificationPresentationResult(true, currentSettings);
         }

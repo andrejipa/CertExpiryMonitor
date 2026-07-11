@@ -254,6 +254,10 @@ public sealed class ReleaseContractTests
         Assert.Contains("Registry.CurrentUser.CreateSubKey($@\"Software\\Classes\\{ProtocolScheme}\\shell\\open\\command\")", source, StringComparison.Ordinal);
         Assert.Contains("return $\"\\\"{executable}\\\" --details \\\"%1\\\"\";", source, StringComparison.Ordinal);
         Assert.Contains("EnsureProtocolHandler(executable)", source, StringComparison.Ordinal);
+        Assert.Contains("Toast registration ready.", source, StringComparison.Ordinal);
+        Assert.Contains("notification plan is empty.", source, StringComparison.Ordinal);
+        Assert.Contains("shortcut or protocol registration is not ready.", source, StringComparison.Ordinal);
+        Assert.Contains("Windows toast notification was submitted successfully.", source, StringComparison.Ordinal);
     }
 
     [Fact]

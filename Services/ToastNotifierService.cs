@@ -65,6 +65,7 @@ public sealed class ToastNotifierService
                 persistFile.Save(shortcutPath, true);
                 EnsureProtocolHandler(executable);
                 _isShortcutReady = true;
+                _logger.Info($"Toast registration ready. AppUserModelId={AppUserModelId}; Protocol={ProtocolScheme}; Shortcut={shortcutPath}");
             }
             finally
             {
@@ -104,8 +105,15 @@ public sealed class ToastNotifierService
 
     public bool Show(NotificationPlan plan, ExpiryThresholds thresholds, bool soundEnabled)
     {
-        if (!plan.HasItems || !_isShortcutReady)
+        if (!plan.HasItems)
         {
+            _logger.Info("Toast delivery skipped because the notification plan is empty.");
+            return false;
+        }
+
+        if (!_isShortcutReady)
+        {
+            _logger.Info("Toast delivery skipped because the Start Menu shortcut or protocol registration is not ready.");
             return false;
         }
 
@@ -140,6 +148,7 @@ public sealed class ToastNotifierService
             }
 
             notifier.Show(toast);
+            _logger.Info("Windows toast notification was submitted successfully.");
             return true;
         }
         catch (Exception ex)
