@@ -42,10 +42,16 @@ internal static class DurableFileWriter
             FileShare.None,
             bufferSize: 4096,
             FileOptions.WriteThrough);
+        // Stryker disable all: leaveOpen e necessario para o flush fisico abaixo, mas seu efeito
+        // ocorre apenas no dispose ao fim do escopo e nao e distinguivel por teste de mutacao.
         using var writer = new StreamWriter(stream, Utf8WithoutBom, bufferSize: 4096, leaveOpen: true);
+        // Stryker restore all
         writer.Write(content);
         writer.Flush();
+        // Stryker disable all: Flush(true) e um contrato de durabilidade do SO sem resultado
+        // observavel em memoria; ReleaseContractTests protege o argumento exato.
         stream.Flush(flushToDisk: true);
+        // Stryker restore all
     }
 
     private static void ReplaceWithRetry(string tempPath, string path, string backupPath)

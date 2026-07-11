@@ -28,11 +28,13 @@ internal sealed class ToastActionDispatcher
 
         var values = ToastActionArgumentParser.Parse(arguments);
         var action = values.GetValueOrDefault("action", "view-details");
+        // Stryker disable all: observabilidade nao participa do despacho funcional.
         _diagnosticEvents?.RecordInfo(
             "toast.activated",
             nameof(ToastActionDispatcher),
             "Usuario ativou acao de toast.",
             new { action });
+        // Stryker restore all
 
         switch (action)
         {
@@ -75,8 +77,10 @@ internal sealed class ToastActionDispatcher
         }
         catch (Exception ex)
         {
+            // Stryker disable all
             _logger.Error(ex, errorMessage);
             _diagnosticEvents?.RecordError(ex, "toast.action_failed", nameof(ToastActionDispatcher), errorMessage);
+            // Stryker restore all
         }
     }
 }

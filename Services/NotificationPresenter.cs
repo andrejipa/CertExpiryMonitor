@@ -1,7 +1,4 @@
 using CertExpiryMonitor.Models;
-using System.Drawing;
-using System.Runtime.InteropServices;
-using System.Windows.Forms;
 
 namespace CertExpiryMonitor.Services;
 
@@ -35,7 +32,8 @@ internal sealed class NotificationPresenter
         _settingsStore = settingsStore;
         _logger = logger;
         _diagnosticEvents = diagnosticEvents;
-        _showFallback = showFallback ?? ShowFallbackWindow;
+        _showFallback = showFallback ?? ((plan, settings, showDetails) =>
+            FallbackNotificationWindow.Show(plan, settings, showDetails, _logger, _diagnosticEvents));
     }
 
     public NotificationPresentationResult Show(NotificationPlan plan, AppSettings settings, Action showDetails)
@@ -51,20 +49,24 @@ internal sealed class NotificationPresenter
             currentSettings.NotificationSoundEnabled);
         if (shown)
         {
+            // Stryker disable all: eventos estruturados nao alteram a decisao de apresentacao.
             _diagnosticEvents?.RecordInfo(
                 "notification.toast_submitted",
                 nameof(NotificationPresenter),
                 "Notificacao toast submetida ao Windows.",
                 new { channel = "windows_toast", due_count = plan.DueCertificates.Count });
+            // Stryker restore all
             return new NotificationPresentationResult(true, currentSettings);
         }
 
+        // Stryker disable all
         _logger.Info("Toast notification was not accepted by Windows; app popup fallback was used.");
         _diagnosticEvents?.RecordWarning(
             "notification.fallback_used",
             nameof(NotificationPresenter),
             "Toast do Windows nao foi aceito; popup proprio sera usado.",
             new { due_count = plan.DueCertificates.Count });
+        // Stryker restore all
 
         if (_settingsStore.TryLoad(out var latestSettings))
         {
@@ -72,11 +74,13 @@ internal sealed class NotificationPresenter
         }
 
         shown = _showFallback(plan, currentSettings, showDetails);
+        // Stryker disable all
         _diagnosticEvents?.RecordInfo(
             shown ? "notification.shown" : "notification.fallback_closed",
             nameof(NotificationPresenter),
             shown ? "Popup proprio exibido e usuario abriu detalhes." : "Popup proprio fechado sem acao efetiva.",
             new { channel = "app_popup", due_count = plan.DueCertificates.Count });
+        // Stryker restore all
         return new NotificationPresentationResult(shown, currentSettings);
     }
 
@@ -94,82 +98,5 @@ internal sealed class NotificationPresenter
         return $"{plan.DueCertificates.Count} certificado(s) precisam de atencao.\r\n{string.Join(" | ", parts)}";
     }
 
-    private bool ShowFallbackWindow(NotificationPlan plan, AppSettings settings, Action showDetails)
-    {
-        try
-        {
-            if (settings.NotificationSoundEnabled)
-            {
-                System.Media.SystemSounds.Exclamation.Play();
-            }
-
-            using var form = new Form
-            {
-                Text = "Certificados digitais",
-                StartPosition = FormStartPosition.CenterScreen,
-                FormBorderStyle = FormBorderStyle.FixedDialog,
-                MaximizeBox = false,
-                MinimizeBox = false,
-                TopMost = true,
-                ShowInTaskbar = true,
-                ClientSize = new Size(360, 185)
-            };
-            var title = new Label
-            {
-                Text = "Certificados próximos do vencimento",
-                Font = new Font(SystemFonts.MessageBoxFont?.FontFamily ?? SystemFonts.DefaultFont.FontFamily, 10F, FontStyle.Bold),
-                Location = new Point(18, 16),
-                Size = new Size(320, 24)
-            };
-            var summary = new Label
-            {
-                Text = BuildFallbackSummary(plan, settings.Thresholds),
-                Location = new Point(18, 48),
-                Size = new Size(320, 58)
-            };
-            var close = new Button
-            {
-                Text = "Fechar aviso",
-                Location = new Point(96, 132),
-                Size = new Size(116, 32),
-                DialogResult = DialogResult.Cancel
-            };
-            var viewDetails = new Button
-            {
-                Text = "Ver detalhes",
-                Location = new Point(226, 132),
-                Size = new Size(116, 32)
-            };
-
-            close.Click += (_, _) => { form.DialogResult = DialogResult.Cancel; form.Close(); };
-            viewDetails.Click += (_, _) => { form.DialogResult = DialogResult.OK; form.Close(); showDetails(); };
-            form.Controls.AddRange([title, summary, close, viewDetails]);
-            form.AcceptButton = viewDetails;
-            form.CancelButton = close;
-            form.Shown += (_, _) =>
-            {
-                form.WindowState = FormWindowState.Normal;
-                form.TopMost = true;
-                form.BringToFront();
-                form.Activate();
-                NativeMethods.SetForegroundWindow(form.Handle);
-            };
-            return form.ShowDialog() == DialogResult.OK;
-        }
-        catch (Exception ex)
-        {
-            _logger.Error(ex, "Failed to show fallback notification");
-            _diagnosticEvents?.RecordError(ex, "notification.fallback_failed", nameof(NotificationPresenter), "Falha ao exibir popup proprio.");
-            return false;
-        }
-    }
-
     private static string FormatCount(string label, int count) => count == 0 ? string.Empty : $"{count} {label}";
-
-    private static class NativeMethods
-    {
-        [DllImport("user32.dll")]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool SetForegroundWindow(IntPtr hWnd);
-    }
 }

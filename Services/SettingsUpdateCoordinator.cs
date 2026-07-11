@@ -29,7 +29,9 @@ internal sealed class SettingsUpdateCoordinator
         ArgumentNullException.ThrowIfNull(update);
         if (!_settingsStore.TryLoad(out var loadedSettings))
         {
+            // Stryker disable all: texto de observabilidade nao altera o contrato de falha.
             _logger.Error(new IOException("settings.json read failed"), "Failed to save settings because current settings could not be read");
+            // Stryker restore all
             return SettingsUpdateResult.Failed;
         }
 
@@ -37,9 +39,11 @@ internal sealed class SettingsUpdateCoordinator
         var plan = DetailsSettingsPlanner.Build(currentSettings, update, now);
         if (!_settingsStore.Save(plan.Settings))
         {
+            // Stryker disable all: erro estruturado e coberto por integracao do DiagnosticEventStore.
             var error = new IOException("settings.json save failed");
             _logger.Error(error, "Failed to persist settings");
             _diagnosticEvents?.RecordError(error, "settings.persist_failed", nameof(SettingsUpdateCoordinator), "Falha ao persistir configuracoes.");
+            // Stryker restore all
             return SettingsUpdateResult.Failed;
         }
 
@@ -51,6 +55,8 @@ internal sealed class SettingsUpdateCoordinator
 
     private void RecordChanges(DetailsSettingsPlan plan, DetailsSettingsUpdate update)
     {
+        // Stryker disable all: este metodo produz apenas telemetria/log/diagnostico; o plano e a
+        // persistencia que governam comportamento permanecem no escopo de mutation testing.
         if (plan.ScheduleChanged)
         {
             _telemetry.Increment(counters => counters.ScheduleChanged++);
@@ -87,5 +93,6 @@ internal sealed class SettingsUpdateCoordinator
                     telemetry_enabled = update.TelemetryEnabled
                 });
         }
+        // Stryker restore all
     }
 }

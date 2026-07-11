@@ -15,6 +15,7 @@ public sealed class DurableFileWriterTests : IDisposable
         DurableFileWriter.WriteAtomic(path, "{\"texto\":\"ação\"}");
 
         Assert.Equal("{\"texto\":\"ação\"}", File.ReadAllText(path));
+        Assert.False(File.ReadAllBytes(path).AsSpan().StartsWith(new byte[] { 0xEF, 0xBB, 0xBF }));
         Assert.Empty(Directory.GetFiles(_tempDir, "*.tmp"));
         Assert.False(File.Exists($"{path}.bak"));
     }

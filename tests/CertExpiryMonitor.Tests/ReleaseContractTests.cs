@@ -515,11 +515,11 @@ public sealed class ReleaseContractTests
     [Fact]
     public void ClosingFallbackPopupDoesNotMarkNotificationAsShown()
     {
-        var source = File.ReadAllText(Path.Combine(Root, "Services", "NotificationPresenter.cs"));
-        var methodStart = source.IndexOf("private bool ShowFallbackWindow", StringComparison.Ordinal);
+        var source = File.ReadAllText(Path.Combine(Root, "Services", "FallbackNotificationWindow.cs"));
+        var methodStart = source.IndexOf("public static bool Show", StringComparison.Ordinal);
         var dialogReturn = source.IndexOf("return form.ShowDialog() == DialogResult.OK;", methodStart, StringComparison.Ordinal);
 
-        Assert.True(methodStart >= 0, "ShowFallbackWindow deve existir.");
+        Assert.True(methodStart >= 0, "FallbackNotificationWindow.Show deve existir.");
         Assert.True(dialogReturn > methodStart, "Fechar fallback sem Ver detalhes nao deve contar como notificacao efetiva.");
         Assert.DoesNotContain("form.ShowDialog();\r\n            return true;", source, StringComparison.Ordinal);
     }

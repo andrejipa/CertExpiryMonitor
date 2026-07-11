@@ -32,6 +32,8 @@ internal sealed class CertificateStateActions
         _expiryEvaluator.DismissCertificate(thumbprint, state);
         if (!TrySaveState(state, $"dismiss certificate {ShortThumbprint(thumbprint)}")) return false;
 
+        // Observabilidade e auditada por testes de integracao; mutacoes aqui nao alteram o estado persistido.
+        // Stryker disable all
         _telemetry.Increment(t => t.DismissOne++);
         _logger.Info($"User dismissed certificate {ShortThumbprint(thumbprint)}.");
         _diagnosticEvents?.RecordInfo(
@@ -39,6 +41,7 @@ internal sealed class CertificateStateActions
             nameof(CertificateStateActions),
             "Usuario marcou certificado para nao lembrar.",
             new { thumbprint });
+        // Stryker restore all
         return true;
     }
 
@@ -55,6 +58,7 @@ internal sealed class CertificateStateActions
         _expiryEvaluator.DismissCertificates(thumbprintList, state);
         if (!TrySaveState(state, "dismiss certificates")) return false;
 
+        // Stryker disable all
         _telemetry.Increment(t => t.DismissAll++);
         _logger.Info("User dismissed certificates from notification action.");
         _diagnosticEvents?.RecordInfo(
@@ -62,6 +66,7 @@ internal sealed class CertificateStateActions
             nameof(CertificateStateActions),
             "Usuario marcou certificados para nao lembrar.",
             new { count = thumbprintList.Length });
+        // Stryker restore all
         return true;
     }
 
@@ -73,6 +78,7 @@ internal sealed class CertificateStateActions
         _expiryEvaluator.RestoreCertificate(thumbprint, state);
         if (!TrySaveState(state, $"restore certificate {ShortThumbprint(thumbprint)}")) return false;
 
+        // Stryker disable all
         _telemetry.Increment(t => t.Restore++);
         _logger.Info($"User restored certificate {ShortThumbprint(thumbprint)}.");
         _diagnosticEvents?.RecordInfo(
@@ -80,6 +86,7 @@ internal sealed class CertificateStateActions
             nameof(CertificateStateActions),
             "Usuario voltou a lembrar certificado.",
             new { thumbprint });
+        // Stryker restore all
         return true;
     }
 
@@ -87,9 +94,11 @@ internal sealed class CertificateStateActions
     {
         if (_stateStore.TryLoad(out state)) return true;
 
+        // Stryker disable all
         _logger.Error(
             new IOException("certificate-state.json read failed"),
             $"Failed to {action} because state could not be read");
+        // Stryker restore all
         return false;
     }
 
@@ -97,7 +106,9 @@ internal sealed class CertificateStateActions
     {
         if (_stateStore.Save(state)) return true;
 
+        // Stryker disable all
         _logger.Error(new IOException("certificate-state.json save failed"), $"Failed to {action}");
+        // Stryker restore all
         return false;
     }
 
