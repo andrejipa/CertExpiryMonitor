@@ -121,9 +121,14 @@ public sealed class ReleaseContractTests
         Assert.Contains("TryReadEncryptedPayload", source, StringComparison.Ordinal);
         Assert.Contains("return DeserializeRecords(decryptedJson);", source, StringComparison.Ordinal);
         Assert.Contains("AtomicWrite(_paths.StatePath, encryptedJson, deleteBackup: true)", source, StringComparison.Ordinal);
-        Assert.Contains("File.Delete(backupPath)", source, StringComparison.Ordinal);
         Assert.Contains("MaxStoredStateBytes = 16_777_216", source, StringComparison.Ordinal);
         Assert.Contains("MaxPlaintextStateBytes = 10_485_760", source, StringComparison.Ordinal);
+
+        var durableWriter = File.ReadAllText(Path.Combine(Root, "Services", "DurableFileWriter.cs"));
+        Assert.Contains("FileOptions.WriteThrough", durableWriter, StringComparison.Ordinal);
+        Assert.Contains("stream.Flush(flushToDisk: true)", durableWriter, StringComparison.Ordinal);
+        Assert.Contains("File.Replace(tempPath, path, backupPath", durableWriter, StringComparison.Ordinal);
+        Assert.Contains("File.Delete(backupPath)", durableWriter, StringComparison.Ordinal);
     }
 
     [Fact]

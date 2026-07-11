@@ -274,10 +274,7 @@ public sealed class TelemetryService
                 mutator(env);
                 env.UpdatedAt = DateTime.UtcNow;
                 var json = JsonSerializer.Serialize(env, JsonOptions);
-                Directory.CreateDirectory(_paths.RootDirectory);
-                // WriteAllText nao e atomico em sentido estrito, mas Telemetry
-                // nao e critica — last-write-wins em caso de race e aceitavel.
-                File.WriteAllText(_paths.TelemetryPath, json);
+                DurableFileWriter.WriteAtomic(_paths.TelemetryPath, json, deleteBackup: true);
             }
             catch (Exception ex)
             {
