@@ -1,6 +1,4 @@
 using CertExpiryMonitor.Models;
-using System.Drawing;
-using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace CertExpiryMonitor.Services;
@@ -13,12 +11,14 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly JsonStateStore _stateStore;
     private readonly CertificateReader _certificateReader;
     private readonly ExpiryEvaluator _expiryEvaluator;
-    private readonly CertificateCheckService _checkService;
     private readonly NotificationCheckCoordinator _checkCoordinator;
     private readonly ToastNotifierService _notifier;
+    private readonly NotificationPresenter _notificationPresenter;
     private readonly StartupRegistration _startup;
     private readonly TelemetryService _telemetry;
     private readonly CertificateStateActions _stateActions;
+    private readonly ToastActionDispatcher _toastActions;
+    private readonly SettingsUpdateCoordinator _settingsUpdater;
     private readonly DiagnosticsBundleService _diagnostics;
     private readonly DiagnosticEventStore _diagnosticEvents;
     private readonly FileLogger _logger;
@@ -40,12 +40,14 @@ public sealed class TrayApplicationContext : ApplicationContext
         JsonStateStore stateStore,
         CertificateReader certificateReader,
         ExpiryEvaluator expiryEvaluator,
-        CertificateCheckService checkService,
         NotificationCheckCoordinator checkCoordinator,
         ToastNotifierService notifier,
+        NotificationPresenter notificationPresenter,
         StartupRegistration startup,
         TelemetryService telemetry,
         CertificateStateActions stateActions,
+        ToastActionDispatcher toastActions,
+        SettingsUpdateCoordinator settingsUpdater,
         DiagnosticsBundleService diagnostics,
         FileLogger logger,
         AppPaths paths,
@@ -57,12 +59,14 @@ public sealed class TrayApplicationContext : ApplicationContext
         _stateStore = stateStore;
         _certificateReader = certificateReader;
         _expiryEvaluator = expiryEvaluator;
-        _checkService = checkService;
         _checkCoordinator = checkCoordinator;
         _notifier = notifier;
+        _notificationPresenter = notificationPresenter;
         _startup = startup;
         _telemetry = telemetry;
         _stateActions = stateActions;
+        _toastActions = toastActions;
+        _settingsUpdater = settingsUpdater;
         _diagnostics = diagnostics;
         _diagnosticEvents = diagnosticEvents;
         _logger = logger;
@@ -410,130 +414,10 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private bool ShowNotification(NotificationPlan plan)
     {
-        var thresholds = _settings.Thresholds.Normalized();
-        var shown = _notifier.Show(plan, thresholds, _settings.NotificationSoundEnabled);
-        if (shown)
-        {
-            _diagnosticEvents.RecordInfo(
-                "notification.shown",
-                "TrayApplicationContext",
-                "Notificacao toast do Windows exibida.",
-                new { channel = "windows_toast", due_count = plan.DueCertificates.Count });
-        }
-        else
-        {
-            _logger.Info("Toast notification was not accepted by Windows; app popup fallback was used.");
-            _diagnosticEvents.RecordWarning(
-                "notification.fallback_used",
-                "TrayApplicationContext",
-                "Toast do Windows nao foi aceito; popup proprio sera usado.",
-                new { due_count = plan.DueCertificates.Count });
-            shown = ShowFallbackWindow(plan);
-            _diagnosticEvents.RecordInfo(
-                shown ? "notification.shown" : "notification.fallback_closed",
-                "TrayApplicationContext",
-                shown ? "Popup proprio exibido e usuario abriu detalhes." : "Popup proprio fechado sem acao efetiva.",
-                new { channel = "app_popup", due_count = plan.DueCertificates.Count });
-        }
-
-        return shown;
+        var presentation = _notificationPresenter.Show(plan, _settings, () => ShowDetails());
+        _settings = presentation.Settings;
+        return presentation.Shown;
     }
-
-    private bool ShowFallbackWindow(NotificationPlan plan)
-    {
-        try
-        {
-            if (_settingsStore.TryLoad(out var latestSettings))
-            {
-                _settings = NormalizeSettings(latestSettings);
-            }
-            if (_settings.NotificationSoundEnabled)
-            {
-                System.Media.SystemSounds.Exclamation.Play();
-            }
-
-            using var form = new Form
-            {
-                Text = "Certificados digitais",
-                StartPosition = FormStartPosition.CenterScreen,
-                FormBorderStyle = FormBorderStyle.FixedDialog,
-                MaximizeBox = false,
-                MinimizeBox = false,
-                TopMost = true,
-                ShowInTaskbar = true,
-                ClientSize = new Size(360, 185)
-            };
-
-            var title = new Label
-            {
-                Text = "Certificados próximos do vencimento",
-                Font = new Font(SystemFonts.MessageBoxFont?.FontFamily ?? SystemFonts.DefaultFont.FontFamily, 10F, FontStyle.Bold),
-                Location = new Point(18, 16),
-                Size = new Size(320, 24)
-            };
-
-            var summary = new Label
-            {
-                Text = BuildFallbackSummary(plan),
-                Location = new Point(18, 48),
-                Size = new Size(320, 58)
-            };
-
-            var close = new Button
-            {
-                Text = "Fechar aviso",
-                Location = new Point(96, 132),
-                Size = new Size(116, 32),
-                DialogResult = DialogResult.Cancel
-            };
-
-            var viewDetails = new Button
-            {
-                Text = "Ver detalhes",
-                Location = new Point(226, 132),
-                Size = new Size(116, 32)
-            };
-
-            close.Click += (_, _) => { form.DialogResult = DialogResult.Cancel; form.Close(); };
-            viewDetails.Click += (_, _) => { form.DialogResult = DialogResult.OK; form.Close(); ShowDetails(); };
-
-            form.Controls.AddRange([title, summary, close, viewDetails]);
-            form.AcceptButton = viewDetails;
-            form.CancelButton = close;
-            form.Shown += (_, _) =>
-            {
-                form.WindowState = FormWindowState.Normal;
-                form.TopMost = true;
-                form.BringToFront();
-                form.Activate();
-                NativeMethods.SetForegroundWindow(form.Handle);
-            };
-            return form.ShowDialog() == DialogResult.OK;
-        }
-        catch (Exception ex)
-        {
-            _logger.Error(ex, "Failed to show fallback notification");
-            _diagnosticEvents.RecordError(ex, "notification.fallback_failed", "TrayApplicationContext", "Falha ao exibir popup proprio.");
-            return false;
-        }
-    }
-
-    private string BuildFallbackSummary(NotificationPlan plan)
-    {
-        var thresholds = _settings.Thresholds.Normalized();
-        var parts = new[]
-        {
-            FormatCount($"até {thresholds.Level30} dias", plan.Count(ExpiryBucket.Days30)),
-            FormatCount($"até {thresholds.Level15} dias", plan.Count(ExpiryBucket.Days15)),
-            FormatCount($"até {thresholds.Level7} dias",  plan.Count(ExpiryBucket.Days7)),
-            FormatCount($"em {thresholds.Level1} dia",    plan.Count(ExpiryBucket.Days1))
-        }.Where(p => p.Length > 0);
-
-        return $"{plan.DueCertificates.Count} certificado(s) precisam de atencao.\r\n{string.Join(" | ", parts)}";
-    }
-
-    private static string FormatCount(string label, int count) =>
-        count == 0 ? string.Empty : $"{count} {label}";
 
     // -------------------------------------------------------------------------
     // Acoes do toast
@@ -541,67 +425,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void HandleToastAction(string arguments)
     {
-        var values = ParseArguments(arguments);
-        var action = values.GetValueOrDefault("action", "view-details");
-        _diagnosticEvents.RecordInfo(
-            "toast.activated",
-            "TrayApplicationContext",
-            "Usuario ativou acao de toast.",
-            new { action });
-
-        switch (action)
-        {
-            case "configure-time":
-                SafeExecute(ShowTimeConfiguration, "Failed to open settings from toast");
-                break;
-            case "dismiss-one":
-                if (values.TryGetValue("thumbprint", out var thumbprint))
-                {
-                    SafeExecute(() => DismissOne(thumbprint), "Failed to dismiss certificate from toast");
-                }
-                break;
-            case "dismiss-all":
-                if (values.TryGetValue("thumbprints", out var thumbprints))
-                {
-                    SafeExecute(
-                        () => DismissAll(thumbprints.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)),
-                        "Failed to dismiss certificates from toast");
-                }
-                else
-                {
-                    SafeExecute(DismissAllCurrent, "Failed to dismiss current certificates");
-                }
-                break;
-            case "view-details":
-                SafeExecute(() => ShowDetails(), "Failed to open details from toast");
-                break;
-            case "remind-later":
-            default:
-                break;
-        }
-    }
-
-    private void DismissOne(string thumbprint)
-    {
-        _ = TryDismissOne(thumbprint);
-    }
-
-    private bool TryDismissOne(string thumbprint)
-    {
-        return _stateActions.DismissOne(thumbprint);
-    }
-
-    private void DismissAllCurrent()
-    {
-        var lastPlan = _checkService.LastPlan;
-        if (lastPlan is null) return;
-
-        _ = _stateActions.DismissAll(lastPlan.DueCertificates.Select(item => item.Certificate.Thumbprint));
-    }
-
-    private void DismissAll(IEnumerable<string> thumbprints)
-    {
-        _ = _stateActions.DismissAll(thumbprints);
+        _toastActions.Dispatch(arguments, ShowTimeConfiguration, () => ShowDetails());
     }
 
     // -------------------------------------------------------------------------
@@ -644,7 +468,7 @@ public sealed class TrayApplicationContext : ApplicationContext
             NotificationTime = _settings.DailyCheckTime,
             NotificationSoundEnabled = _settings.NotificationSoundEnabled,
             Thresholds = _settings.Thresholds.Normalized(),
-            DismissCertificate = TryDismissOne,
+                DismissCertificate = _stateActions.DismissOne,
             RestoreCertificate = RestoreOne,
             RemoveCertificate = RemoveCertificate,
             OpenWindowsCertificateStore = OpenWindowsCertificateStore,
@@ -774,42 +598,12 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private bool SaveSettings(DetailsSettingsUpdate update)
     {
-        if (!_settingsStore.TryLoad(out var loadedSettings))
-        {
-            _logger.Error(new IOException("settings.json read failed"), "Failed to save settings because current settings could not be read");
-            return false;
-        }
+        var result = _settingsUpdater.Apply(update, DateTime.Now);
+        if (!result.Saved || result.Plan is null) return false;
 
-        var currentSettings = NormalizeSettings(loadedSettings);
-        var plan = DetailsSettingsPlanner.Build(currentSettings, update, DateTime.Now);
-        var newSettings = plan.Settings;
-
-        if (!_settingsStore.Save(newSettings))
-        {
-            _logger.Error(new IOException("settings.json save failed"), "Failed to persist settings");
-            _diagnosticEvents.RecordError(
-                new IOException("settings.json save failed"),
-                "settings.persist_failed",
-                "TrayApplicationContext",
-                "Falha ao persistir configuracoes.");
-            return false;
-        }
-
-        _settings = newSettings;
+        var plan = result.Plan;
+        _settings = plan.Settings;
         _forceNextScheduledNotification = plan.ForceNextScheduledNotification;
-
-        if (plan.ScheduleChanged)
-        {
-            _telemetry.Increment(t => t.ScheduleChanged++);
-            _logger.Info($"User changed daily notification time to {plan.SelectedMinute:hh\\:mm}.");
-        }
-
-        if (plan.ThresholdsChanged)
-        {
-            _telemetry.Increment(t => t.ThresholdsChanged++);
-            _logger.Info($"User changed thresholds to {_settings.Thresholds.Level1}/{_settings.Thresholds.Level7}/{_settings.Thresholds.Level15}/{_settings.Thresholds.Level30}.");
-        }
-
         if (plan.ThresholdsChanged)
         {
             _ignoreConfiguredTimeOnNextTimer = true;
@@ -819,39 +613,6 @@ public sealed class TrayApplicationContext : ApplicationContext
         {
             ScheduleNextDailyCheck(allowImmediateToday: plan.ShouldRunAgainToday);
         }
-
-        if (plan.SoundChanged)
-        {
-            _logger.Info($"User changed notification sound setting to {update.NotificationSoundEnabled}.");
-        }
-
-        // Aplica imediatamente nos servicos em runtime (sem precisar reiniciar o app).
-        _logger.ApplySettings(_settings);
-        _telemetry.Enabled = update.TelemetryEnabled;
-
-        if (plan.AdvancedChanged)
-        {
-            _logger.Info($"Advanced settings updated: LogFormat={update.LogFormat}, EventLog={update.EventLogEnabled}, Telemetry={update.TelemetryEnabled}");
-        }
-
-        if (plan.ScheduleChanged || plan.ThresholdsChanged || plan.SoundChanged || plan.AdvancedChanged)
-        {
-            _diagnosticEvents.RecordInfo(
-                "settings.changed",
-                "TrayApplicationContext",
-                "Usuario salvou alteracoes de configuracao.",
-                new
-                {
-                    scheduleChanged = plan.ScheduleChanged,
-                    thresholdsChanged = plan.ThresholdsChanged,
-                    soundChanged = plan.SoundChanged,
-                    advancedChanged = plan.AdvancedChanged,
-                    log_format = update.LogFormat.ToString(),
-                    event_log_enabled = update.EventLogEnabled,
-                    telemetry_enabled = update.TelemetryEnabled
-                });
-        }
-
         return true;
     }
 
@@ -960,10 +721,4 @@ public sealed class TrayApplicationContext : ApplicationContext
         return normalized.Length <= 8 ? normalized : normalized[..8];
     }
 
-    private static class NativeMethods
-    {
-        [System.Runtime.InteropServices.DllImport("user32.dll")]
-        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
-        public static extern bool SetForegroundWindow(IntPtr hWnd);
-    }
 }
