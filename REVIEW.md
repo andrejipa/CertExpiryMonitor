@@ -11,24 +11,28 @@
 7. Nao lembrar mais nenhum: atendido para os certificados do popup. O toast inclui os thumbprints do lote nos argumentos da acao.
 8. Certificados sem chave privada ignorados: atendido em `CertificateReader` com `HasPrivateKey == false`.
 9. Sem acesso/exportacao de chave privada: atendido. O codigo nao chama `Export`, `PrivateKey`, `Get*PrivateKey` ou APIs de assinatura/decriptacao.
-10. Fallback quando Toast interativo falhar: parcialmente atendido. Se a chamada do Toast lancar excecao, usa balloon tip da bandeja. Se o Windows aceitar o Toast mas ocultar botoes por politica, isso nao e detectavel de forma confiavel neste app unpackaged.
+10. Fallback quando Toast falhar: atendido. Se o Windows rejeitar a tentativa, o app abre popup proprio topmost com `Ver detalhes` e `Fechar aviso`; o BugHunt automatiza as duas acoes e verifica ausencia de duplicacao.
 
-## Refatoracoes feitas apos revisao
+## Refatoracoes consolidadas
 
-- `RunCheck(force)` virou `RunCheck(ignoreConfiguredTime)` para preservar a regra de uma verificacao por dia.
-- `DismissCertificate` agora cria estado minimo `Dismissed` quando o thumbprint ainda nao existe no JSON.
-- Textos internos sensiveis a encoding foram simplificados para ASCII.
-- Scripts de instalacao/desinstalacao por usuario foram adicionados.
+- `NotificationCheckCoordinator` concentra check, tentativa de notificacao, `MarkNotified` e persistencia final.
+- `NotificationPresenter`, `ToastActionDispatcher`, `SettingsUpdateCoordinator` e `CertificateStateActions` retiram regras testaveis do host WinForms.
+- `TrayApplicationContext` ficou restrito principalmente a lifecycle, timers, menu e feedback visual.
+- Settings, estado e telemetria usam `DurableFileWriter` com temp, `WriteThrough`, `Flush(true)` e replace atomico.
+- `DetailsForm` possui testes de integracao reais em STA; helpers e colaboradores permanecem cobertos isoladamente.
 
 ## Limitacoes conhecidas
 
 - O app depende de sessao de usuario logada; nao roda como servico.
 - Toast Notifications em app unpackaged dependem de AppUserModelID, atalho no Start Menu e politicas do Windows.
-- Balloon tip fallback nao tem botoes interativos.
+- O Windows nao oferece confirmacao confiavel de exibicao para toast unpackaged: o app distingue submissao aceita de exibicao e mantem popup proprio quando a tentativa e rejeitada.
+- A durabilidade de escrita foi reforcada, mas falha fisica abrupta ainda depende das garantias do filesystem/dispositivo.
+- Nao havia certificado local de code signing valido com chave privada na preparacao da v1.0.10; o instalador interno permanece sem assinatura.
 
 ## Verificacoes posteriores (atualizacao)
 
-- **Build e testes executados localmente** com .NET 8 SDK 8.0.420: `dotnet build` (Release) = 0 erros / 0 avisos; `dotnet test` = 104/104 passando.
-- **Publish single-file validado** (`win-x64`, self-contained, ~75 MB).
+- **Build e testes executados localmente** com .NET 8 SDK 8.0.420: 442/442 testes; cobertura `65,79%` de linhas / `63,37%` de branches.
+- **DetailsForm exercitado em STA** e fluxo de fallback ampliado no BugHunt para as duas acoes do popup.
+- **Publish single-file** permanece sujeito ao gate de release de `< 77 MiB`.
 - **CI configurada** em `.github/workflows/build.yml` para validar build+test+publish em cada push/PR.
 - Em maquinas sem SDK global, ver README "Em maquinas sem o .NET 8 SDK instalado globalmente" para instalacao local via `dotnet-install.ps1`.

@@ -83,8 +83,12 @@ internal static class Program
         var checkService = new CertificateCheckService(settingsStore, stateStore, certificateReader, expiryEvaluator, logger, diagnosticEvents);
         var checkCoordinator = new NotificationCheckCoordinator(settingsStore, checkService, logger, diagnosticEvents);
         var notifier = new ToastNotifierService(logger);
+        var notificationPresenter = new NotificationPresenter(notifier, settingsStore, logger, diagnosticEvents);
         var startup = new StartupRegistration(logger);
         var telemetry = new TelemetryService(paths, logger);
+        var stateActions = new CertificateStateActions(stateStore, expiryEvaluator, telemetry, logger, diagnosticEvents);
+        var toastActions = new ToastActionDispatcher(() => checkService.LastPlan, stateActions, logger, diagnosticEvents);
+        var settingsUpdater = new SettingsUpdateCoordinator(settingsStore, telemetry, logger, diagnosticEvents);
         var diagnostics = new DiagnosticsBundleService(paths, startup, certificateReader, logger, diagnosticEvents);
 
         if (settingsAvailable)
@@ -107,11 +111,14 @@ internal static class Program
             stateStore,
             certificateReader,
             expiryEvaluator,
-            checkService,
             checkCoordinator,
             notifier,
+            notificationPresenter,
             startup,
             telemetry,
+            stateActions,
+            toastActions,
+            settingsUpdater,
             diagnostics,
             logger,
             paths,

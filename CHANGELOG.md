@@ -5,6 +5,36 @@ Todas as mudanças notáveis neste projeto. Formato baseado em
 
 ---
 
+## [1.0.10] — 2026-07-10
+
+### Melhorado
+
+- **Orquestracao da bandeja reduzida**: acoes de estado, atualizacao transacional de configuracoes, despacho de ativacoes e apresentacao de notificacoes foram extraidos de `TrayApplicationContext` para colaboradores pequenos e testaveis.
+- **Persistencia local mais duravel**: settings, estado e telemetria compartilham escrita atomica com `WriteThrough`, `Flush(true)`, retry controlado de replace e limpeza de backup apos sucesso.
+- **Diagnostico de toast preciso**: registro, plano vazio, registro indisponivel e submissao aceita pelo Windows agora produzem evidencias distintas; submissao nao e mais registrada como exibicao garantida.
+- **BugHunt com automacao direta da UI**: o fluxo maximo aciona `Ver detalhes` via UI Automation, verifica instancia unica e rejeita popup duplicado; `Fechar aviso` foi validado pela automacao visual do Windows.
+
+### Testes
+
+- Cinco testes de integracao WinForms em thread STA exercitam construcao/acessibilidade, abas, configuracoes, filtros e dismiss/restore reais do `DetailsForm`.
+- A matriz de colaboradores extraidos cobre apresentacao/fallback, despacho de toast, persistencia de configuracoes e acoes de estado.
+- 442 testes passam; cobertura final de `65,79%` de linhas / `63,37%` de branches, com `NotificationCheckCoordinator` em `100%` / `96,42%`.
+- Mutation testing inclui tambem os novos modulos testaveis: score oficial `70,40%` em 1.216 mutantes executados, acima do piso de `70%`.
+
+### Limitacoes deliberadas
+
+- O toast de aplicativo nao empacotado continua sujeito as politicas do Windows; o popup proprio e o fallback suportado e testado.
+- Nenhum certificado de code signing valido com chave privada estava disponivel nos stores locais durante a release. O instalador permanece sem assinatura, conforme o uso interno definido para o projeto.
+
+### Validacao
+
+- Restore locked, build Release com zero warnings, 442 testes e cobertura `65,79%` de linhas / `63,37%` de branches.
+- Stryker completo `70,40%`; publish single-file `75,52 MiB` e instalador Inno Setup `70,32 MiB`.
+- BugHunt E2E `-Maximum -KeepArtifacts` concluido em `artifacts\bughunt\20260711-002435`, com fallback `HKCU\Run`, instancia unica, popup, abertura de detalhes, SQLite, PNGs, UIA e cleanup validados.
+- O SHA-256 definitivo acompanha a GitHub Release em `SHA256SUMS.txt`, pois o instalador incorpora o `SourceRevisionId` do commit final de `main`.
+
+---
+
 ## [1.0.9] — 2026-07-10
 
 ### Corrigido

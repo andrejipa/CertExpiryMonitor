@@ -304,53 +304,7 @@ public sealed class JsonStateStore
 
     private static void AtomicWrite(string path, string content, bool deleteBackup = false)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var tempPath = $"{path}.{Guid.NewGuid():N}.tmp";
-        var backupPath = $"{path}.bak";
-
-        try
-        {
-            File.WriteAllText(tempPath, content);
-            // Retry com backoff para sharing violation (antivirus, OneDrive, indexador).
-            // Sem isso, save eventual perde dados quando cliente OneDrive locka por ms.
-            ReplaceWithRetry(tempPath, path, backupPath);
-            if (deleteBackup && File.Exists(backupPath))
-            {
-                File.Delete(backupPath);
-            }
-        }
-        finally
-        {
-            if (File.Exists(tempPath))
-            {
-                File.Delete(tempPath);
-            }
-        }
-    }
-
-    private static void ReplaceWithRetry(string tempPath, string path, string backupPath)
-    {
-        const int maxAttempts = 5;
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
-        {
-            try
-            {
-                if (File.Exists(path))
-                {
-                    File.Replace(tempPath, path, backupPath, ignoreMetadataErrors: true);
-                }
-                else
-                {
-                    File.Move(tempPath, path);
-                }
-                return;
-            }
-            catch (IOException) when (attempt < maxAttempts)
-            {
-                // Backoff exponencial: 25ms, 50ms, 100ms, 200ms.
-                Thread.Sleep(25 * (1 << (attempt - 1)));
-            }
-        }
+        DurableFileWriter.WriteAtomic(path, content, deleteBackup);
     }
 
     private void PreserveCorruptFile(string path)

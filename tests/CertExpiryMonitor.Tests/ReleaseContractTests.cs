@@ -59,8 +59,10 @@ public sealed class ReleaseContractTests
         var script = File.ReadAllText(Path.Combine(Root, "scripts", "Run-BugHunt.ps1"));
 
         Assert.Contains("app popup fallback was used", script, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("Close-FallbackPopup $background.Id", script, StringComparison.Ordinal);
-        Assert.Contains("\"Fechar aviso\"", script, StringComparison.Ordinal);
+        Assert.Contains("Invoke-AppWindowButton $background.Id \"Certificados digitais\" \"Ver detalhes\"", script, StringComparison.Ordinal);
+        Assert.Contains("Popup de teste registrou falha de exibicao", script, StringComparison.Ordinal);
+        Assert.Contains("BugHuntNativeMethods]::PostMessage", script, StringComparison.Ordinal);
+        Assert.Contains("Fallback abriu instancia duplicada do app", script, StringComparison.Ordinal);
         Assert.Contains("Wait-ForCondition { Test-Path $telemetryPath }", script, StringComparison.Ordinal);
         Assert.Contains("Nenhum caminho de toast/fallback foi observado no log", script, StringComparison.Ordinal);
     }
@@ -121,9 +123,14 @@ public sealed class ReleaseContractTests
         Assert.Contains("TryReadEncryptedPayload", source, StringComparison.Ordinal);
         Assert.Contains("return DeserializeRecords(decryptedJson);", source, StringComparison.Ordinal);
         Assert.Contains("AtomicWrite(_paths.StatePath, encryptedJson, deleteBackup: true)", source, StringComparison.Ordinal);
-        Assert.Contains("File.Delete(backupPath)", source, StringComparison.Ordinal);
         Assert.Contains("MaxStoredStateBytes = 16_777_216", source, StringComparison.Ordinal);
         Assert.Contains("MaxPlaintextStateBytes = 10_485_760", source, StringComparison.Ordinal);
+
+        var durableWriter = File.ReadAllText(Path.Combine(Root, "Services", "DurableFileWriter.cs"));
+        Assert.Contains("FileOptions.WriteThrough", durableWriter, StringComparison.Ordinal);
+        Assert.Contains("stream.Flush(flushToDisk: true)", durableWriter, StringComparison.Ordinal);
+        Assert.Contains("File.Replace(tempPath, path, backupPath", durableWriter, StringComparison.Ordinal);
+        Assert.Contains("File.Delete(backupPath)", durableWriter, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -247,6 +254,10 @@ public sealed class ReleaseContractTests
         Assert.Contains("Registry.CurrentUser.CreateSubKey($@\"Software\\Classes\\{ProtocolScheme}\\shell\\open\\command\")", source, StringComparison.Ordinal);
         Assert.Contains("return $\"\\\"{executable}\\\" --details \\\"%1\\\"\";", source, StringComparison.Ordinal);
         Assert.Contains("EnsureProtocolHandler(executable)", source, StringComparison.Ordinal);
+        Assert.Contains("Toast registration ready.", source, StringComparison.Ordinal);
+        Assert.Contains("notification plan is empty.", source, StringComparison.Ordinal);
+        Assert.Contains("shortcut or protocol registration is not ready.", source, StringComparison.Ordinal);
+        Assert.Contains("Windows toast notification was submitted successfully.", source, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -392,17 +403,20 @@ public sealed class ReleaseContractTests
     {
         var tray = File.ReadAllText(Path.Combine(Root, "Services", "TrayApplicationContext.cs"));
         var planner = File.ReadAllText(Path.Combine(Root, "Services", "DetailsSettingsPlanner.cs"));
+        var coordinator = File.ReadAllText(Path.Combine(Root, "Services", "SettingsUpdateCoordinator.cs"));
         var methodStart = tray.IndexOf("private bool SaveSettings", StringComparison.Ordinal);
-        var buildPlan = tray.IndexOf("var plan = DetailsSettingsPlanner.Build(currentSettings, update, DateTime.Now);", methodStart, StringComparison.Ordinal);
+        var applyPlan = tray.IndexOf("var result = _settingsUpdater.Apply(update, DateTime.Now);", methodStart, StringComparison.Ordinal);
+        var buildPlan = coordinator.IndexOf("var plan = DetailsSettingsPlanner.Build(currentSettings, update, now);", StringComparison.Ordinal);
         var shouldRunAgain = planner.IndexOf("var shouldRunAgainToday = scheduleChanged && selectedMinute >= currentMinute;", StringComparison.Ordinal);
         var forcePlan = planner.IndexOf("var forceNextScheduledNotification = currentSettings.ForceNextNotificationReminder", shouldRunAgain, StringComparison.Ordinal);
         var forceReminder = tray.IndexOf("_forceNextScheduledNotification = plan.ForceNextScheduledNotification;", methodStart, StringComparison.Ordinal);
 
         Assert.True(methodStart >= 0, "SaveSettings deve existir.");
-        Assert.True(buildPlan > methodStart, "SaveSettings deve delegar o plano puro de configuracoes.");
+        Assert.True(applyPlan > methodStart, "SaveSettings deve delegar a atualizacao transacional.");
+        Assert.True(buildPlan >= 0, "Coordenador deve delegar o plano puro de configuracoes.");
         Assert.True(shouldRunAgain >= 0, "Planner deve rearmar por horario apenas quando houve mudanca real.");
         Assert.True(forcePlan > shouldRunAgain, "Planner deve decidir reminder forçado depois do guard de horario.");
-        Assert.True(forceReminder > buildPlan, "Tray deve aplicar o resultado persistido do planner.");
+        Assert.True(forceReminder > applyPlan, "Tray deve aplicar o resultado persistido do planner.");
     }
 
     [Fact]
@@ -433,29 +447,32 @@ public sealed class ReleaseContractTests
     [Fact]
     public void DetailsSettingsArePersistedWithSingleSettingsSave()
     {
-        var source = File.ReadAllText(Path.Combine(Root, "Services", "TrayApplicationContext.cs"));
-        var methodStart = source.IndexOf("private bool SaveSettings", StringComparison.Ordinal);
-        var methodEnd = source.IndexOf("private bool TestNotificationNow", methodStart, StringComparison.Ordinal);
+        var source = File.ReadAllText(Path.Combine(Root, "Services", "SettingsUpdateCoordinator.cs"));
+        var methodStart = source.IndexOf("public SettingsUpdateResult Apply", StringComparison.Ordinal);
+        var methodEnd = source.IndexOf("private void RecordChanges", methodStart, StringComparison.Ordinal);
         var method = source[methodStart..methodEnd];
 
         Assert.True(methodStart >= 0, "SaveSettings deve existir.");
         Assert.True(methodEnd > methodStart, "SaveSettings deve terminar antes de TestNotificationNow.");
-        Assert.Equal(1, CountOccurrences(method, "_settingsStore.Save(newSettings)"));
+        Assert.Equal(1, CountOccurrences(method, "_settingsStore.Save(plan.Settings)"));
     }
 
     [Fact]
     public void SaveSettingsDoesNotMutateRuntimeSettingsBeforeSuccessfulSave()
     {
-        var source = File.ReadAllText(Path.Combine(Root, "Services", "TrayApplicationContext.cs"));
-        var methodStart = source.IndexOf("private bool SaveSettings", StringComparison.Ordinal);
-        var saveIndex = source.IndexOf("if (!_settingsStore.Save(newSettings))", methodStart, StringComparison.Ordinal);
-        var assignIndex = source.IndexOf("_settings = newSettings;", methodStart, StringComparison.Ordinal);
-        var forceAssignIndex = source.IndexOf("_forceNextScheduledNotification = plan.ForceNextScheduledNotification;", methodStart, StringComparison.Ordinal);
+        var tray = File.ReadAllText(Path.Combine(Root, "Services", "TrayApplicationContext.cs"));
+        var coordinator = File.ReadAllText(Path.Combine(Root, "Services", "SettingsUpdateCoordinator.cs"));
+        var methodStart = tray.IndexOf("private bool SaveSettings", StringComparison.Ordinal);
+        var applyIndex = tray.IndexOf("var result = _settingsUpdater.Apply(update, DateTime.Now);", methodStart, StringComparison.Ordinal);
+        var assignIndex = tray.IndexOf("_settings = plan.Settings;", methodStart, StringComparison.Ordinal);
+        var forceAssignIndex = tray.IndexOf("_forceNextScheduledNotification = plan.ForceNextScheduledNotification;", methodStart, StringComparison.Ordinal);
+        var saveIndex = coordinator.IndexOf("if (!_settingsStore.Save(plan.Settings))", StringComparison.Ordinal);
 
         Assert.True(methodStart >= 0, "SaveSettings deve existir.");
-        Assert.True(saveIndex > methodStart, "SaveSettings deve persistir o objeto proposto.");
-        Assert.True(assignIndex > saveIndex, "Runtime so deve trocar _settings depois de save bem-sucedido.");
-        Assert.True(forceAssignIndex > saveIndex, "Reminder forçado so deve ser armado depois de save bem-sucedido.");
+        Assert.True(saveIndex >= 0, "Coordenador deve persistir o objeto proposto.");
+        Assert.True(applyIndex > methodStart, "Tray deve aguardar o coordenador transacional.");
+        Assert.True(assignIndex > applyIndex, "Runtime so deve trocar _settings depois de save bem-sucedido.");
+        Assert.True(forceAssignIndex > applyIndex, "Reminder forçado so deve ser armado depois de save bem-sucedido.");
     }
 
     [Fact]
@@ -498,11 +515,11 @@ public sealed class ReleaseContractTests
     [Fact]
     public void ClosingFallbackPopupDoesNotMarkNotificationAsShown()
     {
-        var source = File.ReadAllText(Path.Combine(Root, "Services", "TrayApplicationContext.cs"));
-        var methodStart = source.IndexOf("private bool ShowFallbackWindow", StringComparison.Ordinal);
+        var source = File.ReadAllText(Path.Combine(Root, "Services", "FallbackNotificationWindow.cs"));
+        var methodStart = source.IndexOf("public static bool Show", StringComparison.Ordinal);
         var dialogReturn = source.IndexOf("return form.ShowDialog() == DialogResult.OK;", methodStart, StringComparison.Ordinal);
 
-        Assert.True(methodStart >= 0, "ShowFallbackWindow deve existir.");
+        Assert.True(methodStart >= 0, "FallbackNotificationWindow.Show deve existir.");
         Assert.True(dialogReturn > methodStart, "Fechar fallback sem Ver detalhes nao deve contar como notificacao efetiva.");
         Assert.DoesNotContain("form.ShowDialog();\r\n            return true;", source, StringComparison.Ordinal);
     }

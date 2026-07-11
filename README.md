@@ -1,22 +1,27 @@
 # CertExpiryMonitor
 
 [![Build and Test](https://github.com/andrejipa/CertExpiryMonitor/actions/workflows/build.yml/badge.svg)](https://github.com/andrejipa/CertExpiryMonitor/actions)
-![Tests](https://img.shields.io/badge/tests-405%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-442%20passing-brightgreen)
 ![.NET](https://img.shields.io/badge/.NET-8.0-512BD4)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)
 
 Aplicativo Windows leve para monitorar certificados digitais A1 no perfil do usuário logado.
 
-> **Status:** 405 testes passando (build limpo, 0 warnings); cobertura `44,91%` de linhas / `52,47%` de branches; Stryker `70,08%`; publish single-file deve permanecer abaixo de 77 MB.
+> **Status:** 442 testes passando (build limpo, 0 warnings); cobertura `65,79%` de linhas / `63,37%` de branches; Stryker `70,40%`; o single-file deve permanecer abaixo de 77 MiB.
 
 **Repositório:** https://github.com/andrejipa/CertExpiryMonitor
 
 ## Arquitetura
 
 - `Program`: inicialização, mutex de instância única e composição dos serviços.
-- `TrayApplicationContext`: host em background com ícone de bandeja, timer diário, configuração de horário e ações de notificação.
+- `TrayApplicationContext`: host em background com icone de bandeja, timers, lifecycle e encaminhamento de feedback visual.
 - `CertificateCheckService`: encapsula a lógica de verificação (guards de horário/data/hash, cálculo do snapshot hash).
 - `NotificationCheckCoordinator`: coordena check, tentativa de aviso, `MarkNotified` e persistência final sem depender de WinForms.
+- `NotificationPresenter`: tenta o toast, aplica o fallback proprio e registra o canal realmente utilizado.
+- `FallbackNotificationWindow`: mantem a janela WinForms do fallback separada da decisao testavel de apresentacao.
+- `ToastActionDispatcher`: interpreta ativacoes do toast e encaminha detalhes/dismiss sem acoplar o protocolo ao host.
+- `SettingsUpdateCoordinator` / `CertificateStateActions`: isolam persistencia de configuracoes e acoes dismiss/restore.
+- `DurableFileWriter`: escrita atomica compartilhada com flush fisico para settings, estado e telemetria.
 - `CertificateReader`: lê apenas `CurrentUser\My` com `X509Store(StoreName.My, StoreLocation.CurrentUser)` em modo somente leitura.
 - `ExpiryEvaluator`: aplica as faixas configuradas, deduplica por thumbprint e respeita estados persistidos.
 - `ExpiryThresholds`: modelo de faixas configuráveis (padrão: 30/15/7/1 dias); `Normalized()` garante ordering.
@@ -55,7 +60,7 @@ Aplicativo Windows leve para monitorar certificados digitais A1 no perfil do usu
 ## Validação
 
 - Sem duplicação de notificação: `ExpiryEvaluator` usa `HashSet` por thumbprint dentro do plano e estado persistido por thumbprint.
-- Persistência: settings/state são salvos em JSON por usuário com escrita atômica.
+- Persistencia: settings/state/telemetria usam arquivo temporario, flush fisico, replace atomico e backup transitório. Falhas extremas do dispositivo ainda dependem das garantias do filesystem e do hardware.
 - Horário: timer agenda a próxima execução com base no horário salvo e `LastCheckDate` impede repetição diária.
 - Reboot/login: inicialização via Task Scheduler (ONLOGON, sem elevação), com fallback automático para `HKCU\Run` se o Task Scheduler falhar; ao iniciar, aguarda o atraso inicial e executa se o horário do dia já passou.
 - Sem certificados: scanner retorna lista vazia, não mostra popup e salva execução sem erro.
@@ -124,7 +129,7 @@ Invoke-WebRequest -UseBasicParsing 'https://dot.net/v1/dotnet-install.ps1' -OutF
 
 A pasta `.dotnet-local\` está no `.gitignore`. O CI no GitHub Actions já tem o SDK pré-instalado via `actions/setup-dotnet`.
 
-**Cobertura dos testes (405 casos, todos verdes):**
+**Cobertura dos testes (442 casos, todos verdes):**
 
 | Suite | O que cobre |
 |---|---|
@@ -136,6 +141,10 @@ A pasta `.dotnet-local\` está no `.gitignore`. O CI no GitHub Actions já tem o
 | `JsonSettingsStoreTests` | Envelope versionado v1, compat com formato legado, envelope sem `version`/com `version` malformado, migração automática, JSON corrompido preservado |
 | `CertificateCheckServiceTests` | Guards de skip (horário/data/hash), snapshot hash com deduplicação por thumbprint, race do `_isChecking` entre threads, null guards |
 | `NotificationCheckCoordinatorTests` | Ciclo completo: sem pendências, notificação aceita/rejeitada, falhas de estado/settings, retry e reminder persistido |
+| `NotificationPresenterTests` / `ToastActionDispatcherTests` | Toast aceito, fallback, recarga de settings e despacho seguro de ativacoes |
+| `SettingsUpdateCoordinatorTests` / `CertificateStateActionsTests` | Atualizacoes transacionais, falhas de leitura/escrita e dismiss/restore persistidos |
+| `DetailsFormIntegrationTests` | WinForms real em STA: acessibilidade/abas, save, popup, filtros e dismiss/restore |
+| `DurableFileWriterTests` | Flush fisico, replace atomico, retry e limpeza do backup apos sucesso |
 | `StoreReadFailureTests` | Timeout e IO transitório em settings/state sem sobrescrita ou promoção de defaults |
 | `CertificateDocumentHelpersTests` | `FormatDocument` (CPF/CNPJ), proteção contra texto com dígitos embutidos, `ParseHolder`, `GetCommonNameFallback` |
 | `CertificateStatusHelpersTests` | `GetStatusText`/`GetStatusCategory` com thresholds padrão e customizados — garante que o grid colore corretamente quando o usuário muda as faixas |
@@ -151,18 +160,20 @@ A pasta `.dotnet-local\` está no `.gitignore`. O CI no GitHub Actions já tem o
 | `DiagnosticEventStoreTests` | SQLite local de diagnóstico: schema, redaction, corrupção, retenção e snapshot consultável |
 | `DiagnosticsBundleServiceTests` | Pacote `.zip` de diagnóstico com logs/métricas, redaction de hash/documento e status de startup com match/mismatch do executável atual |
 
-**Mutation testing (Stryker 4.14.1, relatório `StrykerOutput\2026-07-10.13-16-11`):**
+**Mutation testing (Stryker 4.14.1, relatório `StrykerOutput\2026-07-10.23-52-34`):**
 
 | Arquivo | Score |
 |---|---:|
 | `Services\NotificationCheckCoordinator.cs` | `73,33%` |
-| `Services\CertificateReader.cs` | `53,85%` |
-| Global oficial | `70,08%` |
+| `Services\NotificationPresenter.cs` | `76,19%` |
+| `Services\DurableFileWriter.cs` | `73,33%` |
+| `Services\SettingsUpdateCoordinator.cs` | `72,73%` |
+| Global oficial | `70,40%` |
 | Baseline preservado, contagem HTML normalizada | `67,90%` |
 
-O score global supera o piso de `70%`. Nos módulos novos, os sobreviventes remanescentes são chamadas/mensagens de observabilidade ou mutações equivalentes; os caminhos funcionais de falha total/parcial, retry, reminder e persistência são cobertos.
+O score global supera o piso de `70%`. Janelas WinForms/WinRT ficam fora do filtro e sao validadas por integracao STA/BugHunt. Exclusoes locais do Stryker documentam apenas observabilidade e contratos fisicos nao observaveis em memoria; os caminhos funcionais continuam no escopo.
 
-**Tamanho do publish single-file v1.0.9 com SQLite:** `75,52 MiB` (`79.183.689` bytes), abaixo do limite de `77 MiB`. Mantidos `PublishTrimmed=false`, `EnableCompressionInSingleFile=true` e `IncludeNativeLibrariesForSelfExtract=true`.
+**Tamanho do publish single-file v1.0.10 com SQLite:** `75,52 MiB`, abaixo do limite de `77 MiB`; instalador Inno Setup `70,32 MiB`. Os bytes e o SHA-256 definitivos acompanham a release porque o binario incorpora o `SourceRevisionId`. Mantidos `PublishTrimmed=false`, `EnableCompressionInSingleFile=true` e `IncludeNativeLibrariesForSelfExtract=true`.
 
 ## Exportar diagnostico para analise
 
