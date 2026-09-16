@@ -106,7 +106,7 @@ public class CertificateReader
     {
         ArgumentNullException.ThrowIfNull(thumbprint);
 
-        var normalizedThumbprint = JsonStateStore.NormalizeThumbprint(thumbprint);
+        var normalizedThumbprint = CertificateIdentity.NormalizeThumbprint(thumbprint);
 
         try
         {
@@ -154,7 +154,7 @@ public class CertificateReader
         var simpleName = certificate.GetNameInfo(X509NameType.SimpleName, false) ?? string.Empty;
 
         return new CertificateSnapshot(
-            JsonStateStore.NormalizeThumbprint(certificate.Thumbprint),
+            CertificateIdentity.NormalizeThumbprint(certificate.Thumbprint),
             certificate.Subject ?? string.Empty,
             certificate.Issuer ?? string.Empty,
             certificate.NotAfter,

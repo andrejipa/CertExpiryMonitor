@@ -12,27 +12,29 @@ namespace CertExpiryMonitor.Services;
 
 public sealed class DetailsFormOptions
 {
-    public required IReadOnlyList<CertificateSnapshot> Certificates { get; init; }
-    public required CertificateReadStatus CertificateReadStatus { get; init; }
-    public required IReadOnlyDictionary<string, CertificateStateRecord> State { get; init; }
-    public required TimeSpan NotificationTime { get; init; }
-    public required bool NotificationSoundEnabled { get; init; }
-    public required ExpiryThresholds Thresholds { get; init; }
-    public required Func<string, bool> DismissCertificate { get; init; }
-    public required Func<string, bool> RestoreCertificate { get; init; }
-    public required Func<string, bool> RemoveCertificate { get; init; }
-    public required Action OpenWindowsCertificateStore { get; init; }
-    public required Func<DetailsSettingsUpdate, bool> SaveSettings { get; init; }
-    public required Func<ExpiryThresholds> GetThresholds { get; init; }
-    public required Func<bool> TestNotificationNow { get; init; }
-    public required Func<(CertificateReadResult CertificateRead, IReadOnlyDictionary<string, CertificateStateRecord> State)> ReloadCertificates { get; init; }
-    public required FileLogger Logger { get; init; }
-    public bool OpenSettingsTab { get; init; }
+    public required IReadOnlyList<CertificateSnapshot> Certificates { get; set; }
+    public required CertificateReadStatus CertificateReadStatus { get; set; }
+    public required IReadOnlyDictionary<string, CertificateStateRecord> State { get; set; }
+    public required TimeSpan NotificationTime { get; set; }
+    public required bool NotificationSoundEnabled { get; set; }
+    public required ExpiryThresholds Thresholds { get; set; }
+    public required Func<string, bool> DismissCertificate { get; set; }
+    public required Func<string, bool> RestoreCertificate { get; set; }
+    public required Func<string, bool> RemoveCertificate { get; set; }
+    public required Action OpenWindowsCertificateStore { get; set; }
+    public required Func<DetailsSettingsUpdate, bool> SaveSettings { get; set; }
+    public required Func<ExpiryThresholds> GetThresholds { get; set; }
+    public required Func<bool> TestNotificationNow { get; set; }
+    public required Func<DetailsLoadResult> ReloadCertificates { get; set; }
+    public required FileLogger Logger { get; set; }
+    public bool OpenSettingsTab { get; set; }
+    public bool SettingsAvailable { get; set; } = true;
+    public bool StateAvailable { get; set; } = true;
 
     // Configuracoes avancadas
-    public required LogFormat LogFormat { get; init; }
-    public required bool EventLogEnabled { get; init; }
-    public required bool TelemetryEnabled { get; init; }
+    public required LogFormat LogFormat { get; set; }
+    public required bool EventLogEnabled { get; set; }
+    public required bool TelemetryEnabled { get; set; }
 }
 
 public sealed record DetailsSettingsUpdate(
@@ -65,7 +67,10 @@ public sealed class DetailsForm : Form
 
     private readonly TabControl _tabs;
     private readonly TabPage _certificatesTab;
-    private readonly TabPage _settingsTab;
+    private TabPage _settingsTab;
+    private Action<ExpiryThresholds>? _thresholdsSaved;
+    private Action<DetailsLoadResult>? _applyCertificateLoad;
+    private readonly Label _readBanner = new() { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(12, 8, 12, 8), ForeColor = Color.Maroon, AccessibleName = "Estado da leitura de certificados" };
 
     public DetailsForm(DetailsFormOptions options)
     {
@@ -84,16 +89,35 @@ public sealed class DetailsForm : Form
         var view  = new DataView(table);
 
         var grid         = BuildGrid(view);
+        grid.TabIndex = 1;
         var summaryPanel = BuildSummaryPanel(table, view, options.Thresholds, grid);
         var status       = BuildStatusLabel(options.Certificates.Count, options.CertificateReadStatus);
         var bottom       = BuildBottomPanel(grid, table, view, summaryPanel, status, options);
+        var empty = new Label { Top = 45, Left = 12, Height = 65, TextAlign = ContentAlignment.MiddleCenter, BackColor = Color.White, AccessibleName = "Resultado da consulta" };
+        grid.Controls.Add(empty);
+        void UpdateViewState()
+        {
+            empty.Width = Math.Max(100, grid.ClientSize.Width - 24);
+            empty.Visible = view.Count == 0;
+            empty.Text = options.CertificateReadStatus != CertificateReadStatus.Success
+                ? "A consulta não foi concluída. Use Atualizar para tentar novamente."
+                : table.Rows.Count == 0 ? "Nenhum certificado A1 encontrado. Instale seu certificado no Windows."
+                : "Nenhum certificado corresponde aos filtros.";
+            status.Text = options.CertificateReadStatus == CertificateReadStatus.Success
+                ? $"{view.Count} de {table.Rows.Count} {(table.Rows.Count == 1 ? "certificado" : "certificados")}" : FormatReadStatus(table.Rows.Count, options.CertificateReadStatus);
+        }
+        view.ListChanged += (_, _) => UpdateViewState();
+        grid.SizeChanged += (_, _) => UpdateViewState();
+        UpdateViewState();
 
         _certificatesTab = new TabPage("Certificados");
         _certificatesTab.Controls.Add(grid);
         _certificatesTab.Controls.Add(summaryPanel);
         _certificatesTab.Controls.Add(bottom);
+        _certificatesTab.Controls.Add(_readBanner);
+        UpdateReadBanner(options);
 
-        _settingsTab = BuildSettingsTab(options, onThresholdsSaved: thresholds =>
+        _thresholdsSaved = thresholds =>
         {
             // Reclassifica as linhas em memoria com os novos thresholds (sem recarregar do disco),
             // atualiza os rotulos "Ate X dias" do summary panel e refaz cores/contagens.
@@ -104,7 +128,17 @@ public sealed class DetailsForm : Form
             // Sem isso, ApplyRowStyles le os StatusCategory antigos do cell cache.
             grid.Refresh();
             ApplyRowStyles(grid);
-        });
+        };
+        _applyCertificateLoad = loaded =>
+        {
+            FillCertificateTable(table, loaded.CertificateRead.Certificates, loaded.State, options.Thresholds);
+            UpdateSummaryItems(summaryPanel, table);
+            grid.ClearSelection();
+            grid.CurrentCell = null;
+            ApplyRowStyles(grid);
+            UpdateViewState();
+        };
+        _settingsTab = BuildSettingsTab(options, _thresholdsSaved);
 
         _tabs = new TabControl { Dock = DockStyle.Fill };
         _tabs.TabPages.Add(_certificatesTab);
@@ -112,6 +146,53 @@ public sealed class DetailsForm : Form
         _tabs.SelectedTab = options.OpenSettingsTab ? _settingsTab : _certificatesTab;
 
         Controls.Add(_tabs);
+        SizeChanged += (_, _) => UpdateReadBanner(options);
+    }
+
+    private void UpdateReadBanner(DetailsFormOptions options)
+    {
+        var messages = new List<string>();
+        if (options.CertificateReadStatus == CertificateReadStatus.StoreFailure)
+            messages.Add("⚠ Não foi possível consultar os certificados. Tente atualizar.");
+        else if (options.CertificateReadStatus == CertificateReadStatus.PartialFailure)
+            messages.Add("⚠ Lista incompleta: alguns certificados não puderam ser consultados.");
+        if (!options.StateAvailable) messages.Add("⚠ Histórico indisponível. Ações de alteração estão bloqueadas.");
+        if (!options.SettingsAvailable) messages.Add("⚠ Configurações indisponíveis. Tente novamente na aba Configurações.");
+        _readBanner.Text = string.Join(Environment.NewLine, messages);
+        _readBanner.Visible = messages.Count > 0;
+        _readBanner.MaximumSize = new Size(Math.Max(250, ClientSize.Width - 16), 0);
+    }
+
+    private void ApplyLoadedSettings(DetailsFormOptions options, DetailsLoadResult loaded)
+    {
+        if (IsDisposed || Disposing) return;
+        if (InvokeRequired)
+        {
+            Invoke(() => ApplyLoadedSettings(options, loaded));
+            return;
+        }
+        options.CertificateReadStatus = loaded.CertificateRead.Status;
+        options.StateAvailable = loaded.StateAvailable;
+        options.SettingsAvailable = loaded.Settings is not null;
+        if (loaded.Settings is { } settings)
+        {
+            options.NotificationTime = settings.DailyCheckTime;
+            options.NotificationSoundEnabled = settings.NotificationSoundEnabled;
+            options.Thresholds = settings.Thresholds.Normalized();
+            options.LogFormat = settings.LogFormat;
+            options.EventLogEnabled = settings.EventLogEnabled;
+            options.TelemetryEnabled = settings.TelemetryEnabled;
+            _thresholdsSaved?.Invoke(options.Thresholds);
+        }
+        UpdateReadBanner(options);
+        _applyCertificateLoad?.Invoke(loaded);
+        using var replacement = BuildSettingsTab(options, _thresholdsSaved);
+        _settingsTab.SuspendLayout();
+        var oldControls = _settingsTab.Controls.Cast<Control>().ToArray();
+        _settingsTab.Controls.Clear();
+        _settingsTab.Controls.AddRange(replacement.Controls.Cast<Control>().ToArray());
+        foreach (var control in oldControls) control.Dispose();
+        _settingsTab.ResumeLayout(true);
     }
 
     public void FocusExisting(bool openSettingsTab)
@@ -184,6 +265,11 @@ public sealed class DetailsForm : Form
         grid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Dismissed",      HeaderText = "Dismissed",      DataPropertyName = "Dismissed",      Visible = false });
         grid.Columns.Add(new DataGridViewTextBoxColumn  { Name = "StatusCategory", HeaderText = "StatusCategory", DataPropertyName = "StatusCategory", Visible = false });
 
+        grid.Columns["Holder"]!.MinimumWidth = 150;
+        grid.Columns["Document"]!.MinimumWidth = 140;
+        grid.Columns["NotAfter"]!.MinimumWidth = 100;
+        grid.Columns["Days"]!.MinimumWidth = 100;
+        grid.Columns["Status"]!.MinimumWidth = 155;
         grid.DataSource = view;
         grid.DataBindingComplete += (_, _) => ApplyRowStyles(grid);
         return grid;
@@ -214,15 +300,17 @@ public sealed class DetailsForm : Form
     private static string FormatReadStatus(int count, CertificateReadStatus readStatus)
     {
         var countText = FormatCountLabel(count);
-        return readStatus == CertificateReadStatus.Success
-            ? countText
-            : $"{countText} Atenção: a leitura do repositório foi incompleta; nenhuma verificação diária foi confirmada.";
+        return readStatus == CertificateReadStatus.Success ? countText
+            : readStatus == CertificateReadStatus.StoreFailure ? "Não foi possível consultar os certificados."
+            : $"Leitura incompleta: {count} certificado(s) consultado(s).";
     }
 
     internal static bool TryParseDailyTime(string? text, out TimeSpan time)
     {
         time = default;
-        if (string.IsNullOrWhiteSpace(text)) return false;
+        if (text is null || text.Length != 5 || text[2] != ':' ||
+            !char.IsAsciiDigit(text[0]) || !char.IsAsciiDigit(text[1]) ||
+            !char.IsAsciiDigit(text[3]) || !char.IsAsciiDigit(text[4])) return false;
 
         var parts = text.Trim().Split(':');
         if (parts.Length != 2) return false;
@@ -280,6 +368,8 @@ public sealed class DetailsForm : Form
         {
             UpdateDismissButtonText(grid, dismiss);
             UpdateRemoveButtonText(grid, remove);
+            dismiss.Enabled &= options.StateAvailable;
+            remove.Enabled &= options.StateAvailable;
         };
         Shown += (_, _) =>
         {
@@ -287,6 +377,8 @@ public sealed class DetailsForm : Form
             grid.CurrentCell = null;
             UpdateDismissButtonText(grid, dismiss);
             UpdateRemoveButtonText(grid, remove);
+            dismiss.Enabled &= options.StateAvailable;
+            remove.Enabled &= options.StateAvailable;
         };
 
         WireDismissButton(dismiss, grid, table, summaryPanel, options);
@@ -296,28 +388,27 @@ public sealed class DetailsForm : Form
 
         var buttonPanel = new FlowLayoutPanel
         {
-            Dock          = DockStyle.Right,
-            Width         = 410,
-            FlowDirection = FlowDirection.RightToLeft,
+            Dock          = DockStyle.Bottom,
+            Height        = 38,
+            FlowDirection = FlowDirection.LeftToRight,
             WrapContents  = false,
             Padding       = new Padding(0),
             Margin        = new Padding(0)
         };
-        // FlowDirection=RightToLeft: o PRIMEIRO Add fica mais a direita.
-        // Convencao Windows: acao primaria/Fechar mais isolada a direita; demais a esquerda.
         // Resultado visual: [Atualizar] [Remover] [Ignorar] [Fechar]
-        buttonPanel.Controls.Add(close);    // direita (rightmost)
-        buttonPanel.Controls.Add(dismiss);  // meio
-        buttonPanel.Controls.Add(remove);
-        buttonPanel.Controls.Add(analyze);  // esquerda
+        analyze.TabIndex = 0; remove.TabIndex = 1; dismiss.TabIndex = 2; close.TabIndex = 3;
+        buttonPanel.Controls.AddRange([analyze, remove, dismiss, close]);
 
         var bottom = new Panel
         {
             Dock      = DockStyle.Bottom,
-            Height    = 48,
+            Height    = 78,
             BackColor = Color.FromArgb(248, 249, 251),
             Padding   = new Padding(0, 6, 8, 6)
         };
+        bottom.TabIndex = 2;
+        status.Dock = DockStyle.Top;
+        status.Height = 26;
         bottom.Controls.Add(status);
         bottom.Controls.Add(buttonPanel);
         return bottom;
@@ -334,7 +425,7 @@ public sealed class DetailsForm : Form
         {
             try
             {
-                if (grid.SelectedRows.Count == 0) return;
+                if (!options.StateAvailable || grid.SelectedRows.Count == 0) return;
 
                 var selectedRow  = grid.SelectedRows[0];
                 var thumbprint   = Convert.ToString(selectedRow.Cells["Thumbprint"].Value);
@@ -355,7 +446,7 @@ public sealed class DetailsForm : Form
 
                 if (rowView is not null)
                 {
-                    var t = options.GetThresholds().Normalized();
+                    var t = options.Thresholds.Normalized();
                     rowView.BeginEdit();
                     rowView["Status"]         = isDismissed ? GetStatusText(daysRemaining, CertificateNotificationState.None, t) : "Ignorado";
                     rowView["Dismissed"]      = !isDismissed;
@@ -418,7 +509,7 @@ public sealed class DetailsForm : Form
 
         contextMenu.Opening += (_, e) =>
         {
-            removeItem.Enabled = grid.SelectedRows.Count > 0;
+            removeItem.Enabled = options.StateAvailable && grid.SelectedRows.Count > 0;
             removeItem.Text = grid.SelectedRows.Count == 1
                 ? "Remover certificado selecionado"
                 : $"Remover {grid.SelectedRows.Count} certificados selecionados";
@@ -446,6 +537,7 @@ public sealed class DetailsForm : Form
         Label status,
         DetailsFormOptions options)
     {
+        if (!options.StateAvailable) return;
         try
         {
             var rows = GetSelectedRowViews(grid).ToArray();
@@ -496,8 +588,8 @@ public sealed class DetailsForm : Form
 
             UpdateSummaryItems(summaryPanel, table);
             status.Text = removed > 0
-                ? $"{FormatCountLabel(table.Rows.Count)} Removido(s): {removed}. Falha(s): {failed}."
-                : FormatCountLabel(table.Rows.Count);
+                ? $"{FormatReadStatus(table.Rows.Count, options.CertificateReadStatus)} Removido(s): {removed}. Falha(s): {failed}."
+                : FormatReadStatus(table.Rows.Count, options.CertificateReadStatus);
             grid.ClearSelection();
             grid.CurrentCell = null;
             ApplyRowStyles(grid);
@@ -518,7 +610,7 @@ public sealed class DetailsForm : Form
         }
     }
 
-    private static void WireAnalyzeButton(
+    private void WireAnalyzeButton(
         Button analyze,
         DataGridView grid,
         DataTable table,
@@ -535,8 +627,8 @@ public sealed class DetailsForm : Form
                 status.Text     = "Atualizando lista de certificados...";
 
                 var refreshed = await Task.Run(options.ReloadCertificates);
-                FillCertificateTable(table, refreshed.CertificateRead.Certificates, refreshed.State, options.GetThresholds());
-                UpdateSummaryItems(summaryPanel, table);
+                ApplyLoadedSettings(options, refreshed);
+
                 status.Text = $"{FormatReadStatus(table.Rows.Count, refreshed.CertificateRead.Status)} Atualizado às {DateTime.Now:HH:mm}.";
                 grid.ClearSelection();
                 grid.CurrentCell = null;
@@ -558,9 +650,23 @@ public sealed class DetailsForm : Form
     // Aba Configuracoes
     // -------------------------------------------------------------------------
 
-    private static TabPage BuildSettingsTab(DetailsFormOptions options, Action<ExpiryThresholds>? onThresholdsSaved = null)
+    private TabPage BuildSettingsTab(DetailsFormOptions options, Action<ExpiryThresholds>? onThresholdsSaved = null)
     {
-        var tab = new TabPage("Configurações") { Padding = new Padding(20), AutoScroll = true };
+        var tab = new TabPage("Configurações") { Padding = new Padding(12) };
+        if (!options.SettingsAvailable)
+        {
+            var retry = new Button { Text = "Tentar novamente", AutoSize = true, Dock = DockStyle.Top, AccessibleName = "Tentar carregar as configurações novamente" };
+            retry.Click += async (_, _) =>
+            {
+                retry.Enabled = false;
+                try { ApplyLoadedSettings(options, await Task.Run(options.ReloadCertificates)); }
+                catch (Exception ex) { options.Logger.Error(ex, "Falha ao recarregar configurações"); }
+                finally { if (!retry.IsDisposed) retry.Enabled = true; }
+            };
+            tab.Controls.Add(retry);
+            tab.Controls.Add(new Label { Text = "⚠ Não foi possível ler as configurações. As preferências foram preservadas. Tente novamente após recuperar o arquivo.", Dock = DockStyle.Top, Height = 65, AccessibleName = "Configurações indisponíveis" });
+            return tab;
+        }
         var tip = new ToolTip { AutoPopDelay = 8000, InitialDelay = 400, ReshowDelay = 200 };
 
         // ===== GroupBox "Notificação" =====
@@ -581,7 +687,7 @@ public sealed class DetailsForm : Form
 
         var lblTime = new Label
         {
-            Text      = "Horário do popup:",
+            Text      = "Horário do aviso:",
             AutoSize  = true,
             Location  = new Point(12, 75),
             TextAlign = ContentAlignment.MiddleLeft
@@ -591,21 +697,23 @@ public sealed class DetailsForm : Form
         {
             Location                = new Point(135, 72),
             Width                   = 62,
-            Text                    = FormatDailyTime(options.NotificationTime),
-            PromptChar              = '0',
+            PromptChar              = '_',
             ResetOnPrompt           = false,
             ResetOnSpace            = false,
-            AccessibleName          = "Horário do popup diário",
+            Text                    = FormatDailyTime(options.NotificationTime),
+            AccessibleName          = "Horário do aviso diário",
             AccessibleDescription   = "Informe um horário de 00:00 até 23:59."
         };
+        var timeError = new ErrorProvider { ContainerControl = this, BlinkStyle = ErrorBlinkStyle.NeverBlink };
+        timeBox.Disposed += (_, _) => timeError.Dispose();
         tip.SetToolTip(timeBox, "Informe o horário no formato 24h, de 00:00 até 23:59.");
 
         var testPopup = new Button
         {
-            Text           = "Testar popup agora",
+            Text           = "Testar aviso agora",
             Location       = new Point(230, 70),
             Size           = new Size(130, 28),
-            AccessibleName = "Testar popup agora (sem aguardar o horário diário)"
+            AccessibleName = "Testar aviso agora (sem aguardar o horário diário)"
         };
         tip.SetToolTip(testPopup, "Dispara o popup imediatamente para validar se a notificação está funcionando.");
 
@@ -640,7 +748,7 @@ public sealed class DetailsForm : Form
         groupThresholds.Controls.Add(thresholdsDesc);
 
         // Layout 1-coluna decrescente: Faixa longa → média → curta → Urgente.
-        var t = options.Thresholds;
+        var t = options.Thresholds.Normalized();
 
         static (Label lbl, NumericUpDown spin) MakeField(string text, int value, int y, string accessibleName, string tooltip, ToolTip tip)
         {
@@ -659,10 +767,10 @@ public sealed class DetailsForm : Form
             return (lbl, spin);
         }
 
-        var (lblL30, spinL30) = MakeField("Faixa longa:",  t.Level30, 50,  "Faixa longa em dias",  "Primeiro aviso — quantos dias ANTES do vencimento começar a avisar. Default: 30 dias.", tip);
-        var (lblL15, spinL15) = MakeField("Faixa média:",  t.Level15, 82,  "Faixa média em dias",  "Segundo aviso — faixa intermediária. Deve ser menor que a faixa longa. Default: 15 dias.", tip);
-        var (lblL7,  spinL7)  = MakeField("Faixa curta:",  t.Level7,  114, "Faixa curta em dias",  "Terceiro aviso — alerta de proximidade. Deve ser menor que a faixa média. Default: 7 dias.", tip);
-        var (lblL1,  spinL1)  = MakeField("Urgente:",      t.Level1,  146, "Urgente em dias",      "Último aviso (crítico) — alerta final. Default: 1 dia.", tip);
+        var (lblL30, spinL30) = MakeField("Faixa longa:",  t.Level30, 50,  "Faixa longa em dias",  "Primeiro aviso — quantos dias ANTES do vencimento começar a avisar. Padrão: 30 dias.", tip);
+        var (lblL15, spinL15) = MakeField("Faixa média:",  t.Level15, 82,  "Faixa média em dias",  "Segundo aviso — faixa intermediária. Deve ser menor que a faixa longa. Padrão: 15 dias.", tip);
+        var (lblL7,  spinL7)  = MakeField("Faixa curta:",  t.Level7,  114, "Faixa curta em dias",  "Terceiro aviso — alerta de proximidade. Deve ser menor que a faixa média. Padrão: 7 dias.", tip);
+        var (lblL1,  spinL1)  = MakeField("Urgente:",      t.Level1,  146, "Urgente em dias",      "Último aviso (crítico) — alerta final. Padrão: 1 dia.", tip);
 
         // Etiqueta "(dias)" à direita de cada spin para reforçar unidade.
         Label DaysSuffix(int y) => new Label
@@ -690,33 +798,33 @@ public sealed class DetailsForm : Form
 
         var chkLogJson = new CheckBox
         {
-            Text     = "Logs em formato JSON (facilita ingestão em SIEM/Splunk)",
+            Text     = "Salvar registros em formato estruturado (JSON)",
             AutoSize = true,
             Checked  = options.LogFormat == LogFormat.Json,
             Location = new Point(12, 24),
             AccessibleName = "Gravar logs em formato JSON estruturado"
         };
-        tip.SetToolTip(chkLogJson, "Formato texto humano-legível (default) vs JSON Lines (uma linha por evento, fácil de parsear). Aplicado em monitor.log.");
+        tip.SetToolTip(chkLogJson, "Facilita a análise técnica dos registros locais de diagnóstico.");
 
         var chkEventLog = new CheckBox
         {
-            Text     = "Espelhar erros no Windows Event Log (Application channel)",
+            Text     = "Registrar erros no Windows",
             AutoSize = true,
             Checked  = options.EventLogEnabled,
             Location = new Point(12, 48),
             AccessibleName = "Espelhar erros no Windows Event Log"
         };
-        tip.SetToolTip(chkEventLog, "Quando ativo, eventos ERROR são duplicados no Event Log do Windows. Padrão para monitoramento corporativo via SCOM/Sentinel.");
+        tip.SetToolTip(chkEventLog, "Guarda uma cópia dos erros no registro de eventos do Windows.");
 
         var chkTelemetry = new CheckBox
         {
-            Text     = "Coletar estatísticas anônimas locais (ajuda a melhorar o app)",
+            Text     = "Guardar estatísticas de uso neste computador",
             AutoSize = true,
             Checked  = options.TelemetryEnabled,
             Location = new Point(12, 72),
             AccessibleName = "Coletar estatísticas anônimas locais"
         };
-        tip.SetToolTip(chkTelemetry, "Salva contadores agregados em telemetry.json (sem rede, sem thumbprints, sem dados pessoais). Apenas: total de checks, notificações exibidas, dismisses. Default: desligado.");
+        tip.SetToolTip(chkTelemetry, "Guarda contagens de uso somente neste computador, sem enviar dados pela rede. Desligado por padrão.");
 
         groupAdvanced.Controls.AddRange([chkLogJson, chkEventLog, chkTelemetry]);
 
@@ -757,14 +865,16 @@ public sealed class DetailsForm : Form
                 spinL7.Value  = proposed.Level7;
                 spinL1.Value  = proposed.Level1;
 
-                if (!TryParseDailyTime(timeBox.Text, out var notificationTime))
+                if (!timeBox.MaskCompleted || !TryParseDailyTime(timeBox.Text, out var notificationTime))
                 {
                     feedback.ForeColor = Color.FromArgb(176, 32, 32);
                     feedback.Text = "Informe um horário válido entre 00:00 e 23:59.";
+                    timeError.SetError(timeBox, "Informe o horário completo, de 00:00 a 23:59.");
                     timeBox.Focus();
                     return;
                 }
 
+                timeError.SetError(timeBox, string.Empty);
                 var saved = options.SaveSettings(new DetailsSettingsUpdate(
                     notificationTime,
                     sound.Checked,
@@ -779,6 +889,8 @@ public sealed class DetailsForm : Form
                     return;
                 }
 
+                options.Thresholds = proposed;
+                options.NotificationTime = notificationTime;
                 onThresholdsSaved?.Invoke(proposed);
 
                 feedback.ForeColor = Color.FromArgb(28, 115, 64);
@@ -793,11 +905,39 @@ public sealed class DetailsForm : Form
 
         testPopup.Click += (_, _) =>
         {
-            try   { feedback.Text = options.TestNotificationNow() ? "Popup de teste enviado." : "Nenhum certificado pendente para popup agora."; }
+            try   { feedback.Text = options.TestNotificationNow() ? "Aviso de teste enviado." : "Nenhum aviso de teste foi enviado. Consulte os certificados monitorados."; }
             catch (Exception ex) { options.Logger.Error(ex, "Failed to test popup"); MessageBox.Show("Não foi possível testar o popup agora. Tente novamente.", "CertExpiryMonitor", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         };
 
-        tab.Controls.AddRange([groupNotification, groupThresholds, groupAdvanced, feedback, saveAll]);
+        var body = new Panel { Dock = DockStyle.Fill, AutoScroll = true, TabIndex = 0 };
+        var groups = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 1, RowCount = 3, Padding = new Padding(0, 0, 0, 8) };
+        groups.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        var index = 0;
+        foreach (var group in new[] { groupNotification, groupThresholds, groupAdvanced })
+        {
+            group.Dock = DockStyle.Top;
+            group.Margin = new Padding(0, 0, 0, 12);
+            group.TabIndex = index++;
+            var childIndex = 0;
+            foreach (Control control in group.Controls) control.TabIndex = childIndex++;
+            groups.Controls.Add(group);
+        }
+        groupNotification.SizeChanged += (_, _) => descTime.Width = Math.Max(100, groupNotification.ClientSize.Width - 24);
+        groupThresholds.SizeChanged += (_, _) => thresholdsDesc.Width = Math.Max(100, groupThresholds.ClientSize.Width - 24);
+        descTime.Height = 48;
+        thresholdsDesc.Height = 30;
+        body.Controls.Add(groups);
+        var footer = new TableLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, ColumnCount = 1, TabIndex = 1 };
+        feedback.Location = Point.Empty;
+        feedback.Dock = DockStyle.Fill;
+        feedback.MaximumSize = new Size(480, 0);
+        feedback.Margin = new Padding(0, 5, 0, 5);
+        saveAll.Anchor = AnchorStyles.Right;
+        saveAll.TabIndex = 0;
+        footer.Controls.Add(feedback);
+        footer.Controls.Add(saveAll);
+        tab.Controls.Add(body);
+        tab.Controls.Add(footer);
         return tab;
     }
 
@@ -834,8 +974,8 @@ public sealed class DetailsForm : Form
         // Usados apenas caracteres do BMP (U+0000..U+FFFF) que estao na fonte Segoe UI padrao.
         summaryItems.Controls.Add(CreateSummaryItem("Expired",   "⛔  Vencidos",                     Color.FromArgb(176, 32, 32)), 0, 0);
         summaryItems.Controls.Add(CreateSummaryItem("Critical",  $"⚠  Até {thresholds.Level7} dias",  Color.FromArgb(180, 96, 0)), 1, 0);
-        summaryItems.Controls.Add(CreateSummaryItem("Warning",   $"⌛  Até {thresholds.Level30} dias", Color.FromArgb(140, 115, 0)), 2, 0);
-        summaryItems.Controls.Add(CreateSummaryItem("Valid",     "✓  Válidos",                       Color.FromArgb(28, 115, 64)), 3, 0);
+        summaryItems.Controls.Add(CreateSummaryItem("Warning",   $"⌛  {thresholds.Level7 + 1} a {thresholds.Level30} dias", Color.FromArgb(140, 115, 0)), 2, 0);
+        summaryItems.Controls.Add(CreateSummaryItem("Valid",     $"✓  Acima de {thresholds.Level30} dias",                       Color.FromArgb(28, 115, 64)), 3, 0);
         summaryItems.Controls.Add(CreateSummaryItem("Dismissed", "⊘  Ignorados",                     Color.FromArgb(90, 90, 90)), 4, 0);
 
         // ===== Linha 2: busca textual + filtro categoria =====
@@ -847,17 +987,17 @@ public sealed class DetailsForm : Form
             ColumnCount = 5,
             RowCount    = 1
         };
-        controlsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 50));
+        controlsRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         controlsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         controlsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 16));
-        controlsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 62));
+        controlsRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         controlsRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
         controlsRow.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
         var lblSearch = new Label
         {
             Text      = "Buscar:",
-            AutoSize  = false,
+            AutoSize  = true,
             Dock      = DockStyle.Fill,
             TextAlign = ContentAlignment.MiddleLeft
         };
@@ -870,10 +1010,10 @@ public sealed class DetailsForm : Form
             AccessibleDescription   = "Filtra a lista por nome do titular ou número do documento. Combina com o filtro de categoria."
         };
         var tip = new ToolTip();
-        tip.SetToolTip(searchBox, "Filtra a lista por nome do titular ou número do documento. A busca é case-insensitive e combina com o filtro de categoria.");
+        tip.SetToolTip(searchBox, "Filtra a lista por nome do titular ou número do documento. A busca ignora diferenças entre maiúsculas e minúsculas e combina com o filtro de categoria.");
 
         var spacer      = new Panel { Dock = DockStyle.Fill };
-        var filterLabel = new Label { Text = "Mostrar:", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
+        var filterLabel = new Label { AutoSize = true, Text = "Mostrar:", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
         var filter      = new ComboBox
         {
             DropDownStyle           = ComboBoxStyle.DropDownList,
@@ -882,7 +1022,9 @@ public sealed class DetailsForm : Form
             AccessibleName          = "Filtro de exibição de certificados",
             AccessibleDescription   = "Mostra apenas certificados de uma categoria (Vencidos, A vencer, Válidos ou Ignorados)."
         };
-        filter.Items.AddRange(["Todos", "Vencidos", "A vencer", "Válidos", "Ignorados"]);
+        filter.Items.AddRange(["Todos", "Vencidos", "A vencer", "Faixa curta", "Faixa longa", "Válidos", "Ignorados"]);
+        filter.Items[3] = $"Até {thresholds.Level7} dias";
+        filter.Items[4] = $"{thresholds.Level7 + 1} a {thresholds.Level30} dias";
         filter.SelectedIndex = 0;
 
         // Funcao centralizada que compoe categoria + busca textual em um unico RowFilter.
@@ -892,12 +1034,14 @@ public sealed class DetailsForm : Form
             var clauses = new List<string>();
 
             // Filtro de categoria
-            var categoryClause = filter.SelectedItem?.ToString() switch
+            var categoryClause = filter.SelectedIndex switch
             {
-                "Vencidos"  => "StatusCategory = 'Expired'",
-                "A vencer"  => "StatusCategory IN ('Critical', 'Warning')",
-                "Válidos"   => "StatusCategory = 'Valid'",
-                "Ignorados" => "StatusCategory = 'Dismissed'",
+                1 => "StatusCategory = 'Expired'",
+                2 => "StatusCategory IN ('Critical', 'Warning')",
+                3 => "StatusCategory = 'Critical'",
+                4 => "StatusCategory = 'Warning'",
+                5 => "StatusCategory = 'Valid'",
+                6 => "StatusCategory = 'Dismissed'",
                 _           => null
             };
             if (categoryClause is not null) clauses.Add(categoryClause);
@@ -917,11 +1061,10 @@ public sealed class DetailsForm : Form
 
             view.RowFilter = clauses.Count > 0 ? string.Join(" AND ", clauses) : string.Empty;
 
-            // Item 8: esconder coluna "Situação" quando filtro de categoria especifico esta ativo
-            // (a coluna ficaria 100% redundante — todas as linhas teriam o mesmo valor).
+            // A situação permanece visível para manter contexto durante a filtragem.
             if (grid.Columns["Status"] is { } statusCol)
             {
-                statusCol.Visible = categoryClause is null;
+                statusCol.Visible = true;
             }
         }
 
@@ -929,21 +1072,21 @@ public sealed class DetailsForm : Form
         searchBox.TextChanged       += (_, _) => ApplyFilters();
 
         // Item 1: cards clicaveis mudam o filtro de categoria.
-        foreach (var label in summaryItems.Controls.OfType<Label>())
+        foreach (var label in summaryItems.Controls.OfType<Button>())
         {
             label.Cursor = Cursors.Hand;
             tip.SetToolTip(label, "Clique para filtrar a lista por esta categoria.");
             var categoryName = label.Name; // captura para closure
             label.Click += (_, _) =>
             {
-                filter.SelectedItem = categoryName switch
+                filter.SelectedIndex = categoryName switch
                 {
-                    "Expired"   => "Vencidos",
-                    "Critical"  => "A vencer",  // Critical é parte de "A vencer"
-                    "Warning"   => "A vencer",
-                    "Valid"     => "Válidos",
-                    "Dismissed" => "Ignorados",
-                    _           => "Todos"
+                    "Expired"   => 1,
+                    "Critical"  => 3,
+                    "Warning"   => 4,
+                    "Valid"     => 5,
+                    "Dismissed" => 6,
+                    _           => 0
                 };
             };
         }
@@ -954,17 +1097,47 @@ public sealed class DetailsForm : Form
         controlsRow.Controls.Add(filterLabel, 3, 0);
         controlsRow.Controls.Add(filter, 4, 0);
 
+        summaryItems.TabIndex = 0;
+        controlsRow.TabIndex = 1;
+        searchBox.TabIndex = 0;
+        filter.TabIndex = 1;
+        panel.TabIndex = 0;
+        var cards = summaryItems.Controls.Cast<Control>().ToArray();
+        void ResizeSummary()
+        {
+            var columns = panel.ClientSize.Width >= 760 ? 5 : 3;
+            var rows = columns == 5 ? 1 : 2;
+            summaryItems.SuspendLayout();
+            summaryItems.ColumnCount = columns;
+            summaryItems.RowCount = rows;
+            summaryItems.ColumnStyles.Clear();
+            summaryItems.RowStyles.Clear();
+            for (var i = 0; i < columns; i++) summaryItems.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / columns));
+            for (var i = 0; i < rows; i++) summaryItems.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
+            for (var i = 0; i < cards.Length; i++)
+            {
+                summaryItems.SetCellPosition(cards[i], new TableLayoutPanelCellPosition(i % columns, i / columns));
+                cards[i].TabIndex = i;
+            }
+            summaryItems.Height = rows * 60;
+            panel.Height = rows * 60 + SummaryControlsHeight + 24;
+            summaryItems.ResumeLayout();
+        }
+        panel.SizeChanged += (_, _) => ResizeSummary();
+        ResizeSummary();
         panel.Controls.Add(controlsRow);
         panel.Controls.Add(summaryItems);
         UpdateSummaryItems(panel, table);
         return panel;
     }
 
-    private static Label CreateSummaryItem(string name, string label, Color color)
+    private static Button CreateSummaryItem(string name, string label, Color color)
     {
-        return new Label
+        return new Button
         {
             Name      = name,
+            TabStop = true,
+            FlatStyle = FlatStyle.Standard,
             AutoSize  = false,
             Dock      = DockStyle.Fill,
             Margin    = new Padding(0, 0, 8, 0),
@@ -980,7 +1153,7 @@ public sealed class DetailsForm : Form
 
     private static void UpdateSummaryItems(Control panel, DataTable table)
     {
-        foreach (var label in EnumerateControls(panel).OfType<Label>())
+        foreach (var label in EnumerateControls(panel).OfType<Button>())
         {
             if (label.Tag is not string title) continue;
 
@@ -995,6 +1168,7 @@ public sealed class DetailsForm : Form
             };
 
             label.Text = $"{count}\r\n{title}";
+            label.AccessibleName = $"{title}: {count} {(count == 1 ? "certificado" : "certificados")}. Filtrar lista.";
         }
     }
 
@@ -1004,12 +1178,18 @@ public sealed class DetailsForm : Form
         // entao formata `count + Tag` no Text. Demais labels (Expired/Valid/Dismissed)
         // tem titulos fixos e nao dependem dos thresholds.
         var normalized = thresholds.Normalized();
-        foreach (var label in EnumerateControls(panel).OfType<Label>())
+        var filter = EnumerateControls(panel).OfType<ComboBox>().Single();
+        var selectedIndex = filter.SelectedIndex;
+        filter.Items[3] = $"Até {normalized.Level7} dias";
+        filter.Items[4] = $"{normalized.Level7 + 1} a {normalized.Level30} dias";
+        filter.SelectedIndex = selectedIndex;
+        foreach (var label in EnumerateControls(panel).OfType<Button>())
         {
             label.Tag = label.Name switch
             {
                 "Critical" => $"⚠  Até {normalized.Level7} dias",
-                "Warning"  => $"⌛  Até {normalized.Level30} dias",
+                "Warning"  => $"⌛  {normalized.Level7 + 1} a {normalized.Level30} dias",
+                "Valid" => $"✓  Acima de {normalized.Level30} dias",
                 _          => label.Tag
             };
         }
@@ -1073,7 +1253,7 @@ public sealed class DetailsForm : Form
         var normalized = thresholds.Normalized();
         foreach (var certificate in certificates.OrderBy(c => c.NotAfter))
         {
-            var thumbprint    = JsonStateStore.NormalizeThumbprint(certificate.Thumbprint);
+            var thumbprint    = CertificateIdentity.NormalizeThumbprint(certificate.Thumbprint);
             state.TryGetValue(thumbprint, out var record);
             var daysRemaining = DateOnly.FromDateTime(certificate.NotAfter.Date).DayNumber
                               - DateOnly.FromDateTime(DateTime.Today).DayNumber;
@@ -1176,7 +1356,8 @@ public sealed class DetailsForm : Form
         dismiss.Enabled = true;
         var isDismissed = grid.SelectedRows[0].DataBoundItem is DataRowView rv &&
                           rv.Row.Field<bool>("Dismissed");
-        dismiss.Text = isDismissed ? "Lembrar" : "Ignorar";
+        dismiss.Text = isDismissed ? "Restaurar" : "Ignorar";
+        dismiss.AccessibleName = isDismissed ? "Restaurar avisos do certificado selecionado" : "Ignorar ou restaurar o certificado selecionado";
     }
 
     private static void UpdateRemoveButtonText(DataGridView grid, Button remove)

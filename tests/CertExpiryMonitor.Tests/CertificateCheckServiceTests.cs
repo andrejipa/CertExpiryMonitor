@@ -401,31 +401,34 @@ public sealed class CertificateCheckServiceTests : IDisposable
         // pelo guard; a outra retorna (false, null) imediatamente.
         _certReader.Certificates = [Cert("FF", DateTime.Today.AddDays(30))];
 
-        // Bloqueia o fake reader ate ambos os RunCheck terem entrado, garantindo
-        // que ambos disputem o guard simultaneamente.
+        // Mantem a primeira chamada dentro do reader enquanto a segunda disputa
+        // o guard. Nao depender do agendamento de duas tarefas no ThreadPool.
         using var gate    = new ManualResetEventSlim(false);
-        using var entered = new CountdownEvent(2);
+        using var entered = new ManualResetEventSlim(false);
         _certReader.OnRead = () =>
         {
-            entered.Signal();
-            gate.Wait(TimeSpan.FromSeconds(5));
+            entered.Set();
+            if (!gate.Wait(TimeSpan.FromSeconds(10)))
+                throw new TimeoutException("A chamada concorrente nao retornou enquanto o reader estava bloqueado.");
         };
 
         var settings1 = new AppSettings { DailyCheckTime = TimeSpan.Zero };
         var settings2 = new AppSettings { DailyCheckTime = TimeSpan.Zero };
 
-        var task1 = Task.Run(() => _service.RunCheck(true, true, false, settings1));
-        var task2 = Task.Run(() => _service.RunCheck(true, true, false, settings2));
-
-        // Espera ate 2s pelos dois entrarem no reader; se o guard ja bloqueou, OK.
-        entered.Wait(TimeSpan.FromSeconds(2));
-        gate.Set();
-
-        var (ran1, _) = await task1;
-        var (ran2, _) = await task2;
-
-        // Exatamente um dos dois rodou; o outro foi bloqueado pelo Interlocked guard.
-        Assert.True(ran1 ^ ran2, $"Esperado exatamente 1 ran=true, obtido ran1={ran1} ran2={ran2}");
+        var first = Task.Factory.StartNew(() => _service.RunCheck(true, true, false, settings1),
+            CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(10)), "A primeira chamada nao entrou no reader.");
+            var (ran2, _) = _service.RunCheck(true, true, false, settings2);
+            Assert.False(ran2);
+        }
+        finally
+        {
+            gate.Set();
+            var (ran1, _) = await first;
+            Assert.True(ran1);
+        }
     }
 
     // -------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-param(
+﻿param(
     [switch]$Maximum,
     [switch]$KeepArtifacts,
     [string]$DotNetPath,
@@ -76,6 +76,8 @@ public static class BugHuntNativeMethods {
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int count);
 }
 '@ -ErrorAction SilentlyContinue
 
@@ -427,10 +429,10 @@ function Restore-Snapshot {
         try {
             $arguments = Get-OriginalArguments $process.CommandLine $process.ExecutablePath
             if ([string]::IsNullOrWhiteSpace($arguments)) {
-                Start-Process -FilePath $process.ExecutablePath | Out-Null
+                Start-Process -FilePath $process.ExecutablePath -WindowStyle Hidden | Out-Null
             }
             else {
-                Start-Process -FilePath $process.ExecutablePath -ArgumentList $arguments | Out-Null
+                Start-Process -FilePath $process.ExecutablePath -ArgumentList $arguments -WindowStyle Hidden | Out-Null
             }
         }
         catch {
@@ -585,6 +587,71 @@ function Invoke-AppWindowButton([int]$ProcessId, [string]$WindowName, [string]$B
     return $false
 }
 
+function Find-NamedControl($Window, [string]$Name) {
+    $condition = [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::NameProperty, $Name)
+    return $Window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+}
+
+function Assert-CorruptionUi([int]$ProcessId, [bool]$SettingsCase, [bool]$Recovered) {
+    Wait-ForCondition {
+        $null -ne (Find-AppWindow $ProcessId "Certificados A1 monitorados")
+    } 15 "Janela nao abriu no gate de recuperacao"
+    $window = Find-AppWindow $ProcessId "Certificados A1 monitorados"
+    if ($SettingsCase) {
+        $unavailable = Find-NamedControl $window "Configurações indisponíveis"
+        $editor = Find-NamedControl $window "Horário do aviso diário"
+        if ($Recovered) {
+            Assert-True ($null -ne $editor -and $null -eq $unavailable) "Editor nao voltou apos recuperar settings"
+        } else {
+            Assert-True ($null -eq $editor -and $null -ne $unavailable) "Settings invalido apresentou editor ou omitiu indisponibilidade"
+        }
+    } else {
+        $banner = Find-NamedControl $window "Estado da leitura de certificados"
+        $historyUnavailable = $false
+        if ($null -ne $banner -and -not $banner.Current.IsOffscreen) {
+            $text = New-Object System.Text.StringBuilder 2048
+            [void][BugHuntNativeMethods]::GetWindowText([IntPtr]$banner.Current.NativeWindowHandle, $text, $text.Capacity)
+            $historyUnavailable = Test-ContainsIgnoreCase $text.ToString() "Histórico indisponível"
+        }
+        Assert-True ($historyUnavailable -ne $Recovered) "Banner de historico nao corresponde ao estado de recuperacao"
+        if ($Recovered) {
+            Assert-True ($null -ne (Find-NamedControl $window "Lista de certificados A1 do usuario atual")) "Grade ausente apos recuperar historico"
+        }
+    }
+}
+
+function Test-CorruptionAcrossRestart([string]$ExecutablePath) {
+    Write-Step "Validando corrupcao e recuperacao apos reinicio real"
+    foreach ($settingsCase in @($true, $false)) {
+        $fileName = if ($settingsCase) { "settings.json" } else { "certificate-state.json" }
+        $argument = if ($settingsCase) { "--configure" } else { "--details" }
+        $path = Join-Path $dataDir $fileName
+        $backup = Join-Path $artifactDir ("valid-test-" + $fileName)
+        Stop-AppProcesses
+        Assert-True (Test-Path -LiteralPath $path) "Arquivo valido de teste ausente antes do gate"
+        Copy-Item -LiteralPath $path -Destination $backup -Force
+        $invalid = [Text.Encoding]::UTF8.GetBytes('{ invalid-bughunt')
+        try {
+            [IO.File]::WriteAllBytes($path, $invalid)
+            $invalidHash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+            for ($attempt = 0; $attempt -lt 2; $attempt++) {
+                $process = Start-Process -FilePath $ExecutablePath -ArgumentList $argument -PassThru -WindowStyle Hidden
+                Assert-CorruptionUi $process.Id $settingsCase $false
+                Stop-AppProcesses
+                Assert-True ((Test-Path -LiteralPath $path) -and (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -eq $invalidHash) "Reinicio alterou arquivo invalido"
+            }
+        } finally {
+            Stop-AppProcesses
+            Copy-Item -LiteralPath $backup -Destination $path -Force
+        }
+        $process = Start-Process -FilePath $ExecutablePath -ArgumentList $argument -PassThru -WindowStyle Hidden
+        Assert-CorruptionUi $process.Id $settingsCase $true
+        Stop-AppProcesses
+    }
+    Write-Host "Corrupcao persistiu por dois processos e recuperacao foi confirmada para settings e estado."
+}
+
 function Get-LogOccurrenceCount([string]$Needle) {
     $monitorLog = Join-Path $dataDir "monitor.log"
     if (-not (Test-Path $monitorLog)) { return 0 }
@@ -696,7 +763,7 @@ try {
     New-BugHuntCertificate
 
     Write-Step "Validando background, startup e notificacao"
-    $background = Start-Process -FilePath $installedExe -ArgumentList "--background" -PassThru
+    $background = Start-Process -FilePath $installedExe -ArgumentList "--background" -PassThru -WindowStyle Hidden
     Start-Sleep -Seconds 5
     Assert-True (-not $background.HasExited) "Processo background encerrou cedo demais"
 
@@ -715,10 +782,10 @@ try {
     Assert-True (Test-ContainsIgnoreCase $protocolCommand "--details") "Protocolo cert-expiry-monitor nao abre detalhes: $protocolCommand"
     Assert-True (Test-ContainsIgnoreCase $protocolCommand '"%1"') "Protocolo cert-expiry-monitor nao repassa URI: $protocolCommand"
 
-    $second = Start-Process -FilePath $installedExe -ArgumentList "--details" -PassThru
+    $second = Start-Process -FilePath $installedExe -ArgumentList "--details" -PassThru -WindowStyle Hidden
     Assert-True ($second.WaitForExit(10000)) "Segunda instancia nao encerrou apos sinalizar primeira instancia"
 
-    Start-Process -FilePath "cert-expiry-monitor://details" | Out-Null
+    Start-Process -FilePath "cert-expiry-monitor://details" -WindowStyle Hidden | Out-Null
     Wait-ForCondition {
         $monitorLog = Join-Path $dataDir "monitor.log"
         if (-not (Test-Path $monitorLog)) { return $false }
@@ -757,10 +824,10 @@ try {
         $isolatedProcesses = @(Get-Process -Name $appName -ErrorAction SilentlyContinue | Where-Object { Test-ProcessPathEquals $_.Path $installedExe })
         Assert-True ($isolatedProcesses.Count -eq 1) "Fallback abriu instancia duplicada do app"
 
-        $configure = Start-Process -FilePath $installedExe -ArgumentList "--configure" -PassThru
+        $configure = Start-Process -FilePath $installedExe -ArgumentList "--configure" -PassThru -WindowStyle Hidden
         Assert-True ($configure.WaitForExit(10000)) "Segunda instancia --configure nao encerrou"
         $fallbackCountBeforeTest = Get-LogOccurrenceCount "app popup fallback was used"
-        Assert-True (Invoke-AppWindowButton $background.Id "Certificados A1 monitorados" "Testar popup agora" 20) "Botao Testar popup agora nao foi acionado via UI Automation"
+        Assert-True (Invoke-AppWindowButton $background.Id "Certificados A1 monitorados" "Testar aviso agora" 20) "Botao Testar aviso agora nao foi acionado via UI Automation"
         Wait-ForCondition {
             (Get-LogOccurrenceCount "app popup fallback was used") -gt $fallbackCountBeforeTest
         } 20 "Popup de teste nao percorreu o fallback esperado"
@@ -798,6 +865,8 @@ try {
         "-Mode", "configure"
     ) "Captura UI --configure"
     Assert-CaptureArtifacts $configureCapture
+
+    Test-CorruptionAcrossRestart $installedExe
 
     Write-Step "Validacao final antes do cleanup"
     Assert-True ((Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Subject -eq $subject }).Count -eq 1) "Certificado de teste nao esta no estado esperado"

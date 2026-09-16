@@ -10,6 +10,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly JsonSettingsStore _settingsStore;
     private readonly JsonStateStore _stateStore;
     private readonly CertificateReader _certificateReader;
+    private readonly DetailsDataLoader _detailsLoader;
     private readonly ExpiryEvaluator _expiryEvaluator;
     private readonly NotificationCheckCoordinator _checkCoordinator;
     private readonly ToastNotifierService _notifier;
@@ -39,6 +40,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         JsonSettingsStore settingsStore,
         JsonStateStore stateStore,
         CertificateReader certificateReader,
+        DetailsDataLoader detailsLoader,
         ExpiryEvaluator expiryEvaluator,
         NotificationCheckCoordinator checkCoordinator,
         ToastNotifierService notifier,
@@ -58,6 +60,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         _settingsStore = settingsStore;
         _stateStore = stateStore;
         _certificateReader = certificateReader;
+        _detailsLoader = detailsLoader;
         _expiryEvaluator = expiryEvaluator;
         _checkCoordinator = checkCoordinator;
         _notifier = notifier;
@@ -383,21 +386,13 @@ public sealed class TrayApplicationContext : ApplicationContext
             _telemetry.Increment(t => t.NotificationFailures++);
         }
 
-        if (showNoAlertFeedback && result.Status == CheckCycleStatus.CompletedNoDue)
+        if (showNoAlertFeedback && result.ManualFeedback is { } feedback)
         {
             _notifyIcon.ShowBalloonTip(
-                3000,
+                result.Status == CheckCycleStatus.ReadFailed ? 5000 : 3000,
                 "Monitor de Certificados A1",
-                "Nenhum certificado próximo do vencimento.",
-                ToolTipIcon.Info);
-        }
-        else if (showNoAlertFeedback && result.Status == CheckCycleStatus.ReadFailed)
-        {
-            _notifyIcon.ShowBalloonTip(
-                5000,
-                "Monitor de Certificados A1",
-                "A verificação não foi concluída porque settings, estado ou certificados não puderam ser lidos. Nenhum dado foi alterado.",
-                ToolTipIcon.Warning);
+                feedback,
+                result.Status == CheckCycleStatus.ReadFailed ? ToolTipIcon.Warning : ToolTipIcon.Info);
         }
 
         if (result.Ran)
@@ -448,27 +443,23 @@ public sealed class TrayApplicationContext : ApplicationContext
             return;
         }
 
-        if (!_stateStore.TryLoad(out var state))
+        var loaded = LoadCertificateDetails();
+        if (loaded.Settings is { } availableSettings)
         {
-            MessageBox.Show(
-                "Não foi possível ler o estado dos certificados. A janela não será aberta para evitar alterações sobre dados incompletos.",
-                "CertExpiryMonitor",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
-            return;
+            _settings = availableSettings;
         }
-
-        var certificateRead = _certificateReader.ReadCurrentUserPersonalCertificates();
 
         _detailsForm = new DetailsForm(new DetailsFormOptions
         {
-            Certificates = certificateRead.Certificates,
-            CertificateReadStatus = certificateRead.Status,
-            State = state,
+            Certificates = loaded.CertificateRead.Certificates,
+            CertificateReadStatus = loaded.CertificateRead.Status,
+            State = loaded.State,
+            SettingsAvailable = loaded.SettingsAvailable,
+            StateAvailable = loaded.StateAvailable,
             NotificationTime = _settings.DailyCheckTime,
             NotificationSoundEnabled = _settings.NotificationSoundEnabled,
             Thresholds = _settings.Thresholds.Normalized(),
-                DismissCertificate = _stateActions.DismissOne,
+            DismissCertificate = _stateActions.DismissOne,
             RestoreCertificate = RestoreOne,
             RemoveCertificate = RemoveCertificate,
             OpenWindowsCertificateStore = OpenWindowsCertificateStore,
@@ -488,15 +479,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         _detailsForm.FocusExisting(openSettingsTab);
     }
 
-    private (CertificateReadResult CertificateRead, IReadOnlyDictionary<string, CertificateStateRecord> State) LoadCertificateDetails()
-    {
-        if (!_stateStore.TryLoad(out var state))
-        {
-            throw new IOException("certificate-state.json could not be read");
-        }
-
-        return (_certificateReader.ReadCurrentUserPersonalCertificates(), state);
-    }
+    private DetailsLoadResult LoadCertificateDetails() => _detailsLoader.Load();
 
     // -------------------------------------------------------------------------
     // Acoes do menu / callbacks do DetailsForm
@@ -510,9 +493,9 @@ public sealed class TrayApplicationContext : ApplicationContext
             return;
         }
 
-        var previousSettings = NormalizeSettings(loadedSettings);
+        var previousSettings = NotificationCheckCoordinator.NormalizeSettings(loadedSettings);
         var previousStartupEnabled = previousSettings.StartupEnabled;
-        var newSettings = NormalizeSettings(loadedSettings);
+        var newSettings = NotificationCheckCoordinator.NormalizeSettings(loadedSettings);
         newSettings.StartupEnabled = !newSettings.StartupEnabled;
 
         var startupChanged = newSettings.StartupEnabled
@@ -620,6 +603,12 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         _logger.Info("User requested test notification.");
         _diagnosticEvents.RecordInfo("notification.test_requested", "TrayApplicationContext", "Usuario solicitou teste de notificacao.");
+        if (!_settingsStore.TryLoad(out var currentSettings))
+        {
+            MessageBox.Show("Não foi possível ler as configurações. Tente novamente após recuperar o arquivo.", "Certificados digitais", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
+        }
+        _settings = NotificationCheckCoordinator.NormalizeSettings(currentSettings);
         if (!_stateStore.TryLoad(out var state))
         {
             MessageBox.Show("Não foi possível ler o estado dos certificados.", "Certificados digitais", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -694,30 +683,13 @@ public sealed class TrayApplicationContext : ApplicationContext
         }
     }
 
-    private static AppSettings NormalizeSettings(AppSettings settings)
-    {
-        if (settings.DailyCheckTime < TimeSpan.Zero || settings.DailyCheckTime >= TimeSpan.FromDays(1))
-        {
-            settings.DailyCheckTime = TimeSpan.FromHours(9);
-        }
-
-        if (settings.InitialDelayMinutes <= 0)
-        {
-            settings.InitialDelayMinutes = 5;
-        }
-
-        settings.Thresholds = (settings.Thresholds ?? new ExpiryThresholds()).Normalized();
-
-        return settings;
-    }
-
     internal static Dictionary<string, string> ParseArguments(string? arguments)
         => ToastActionArgumentParser.Parse(arguments);
 
     private static string ShortThumbprint(string thumbprint)
     {
         if (string.IsNullOrWhiteSpace(thumbprint)) return "(empty)";
-        var normalized = JsonStateStore.NormalizeThumbprint(thumbprint);
+        var normalized = CertificateIdentity.NormalizeThumbprint(thumbprint);
         return normalized.Length <= 8 ? normalized : normalized[..8];
     }
 

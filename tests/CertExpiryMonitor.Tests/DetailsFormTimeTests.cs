@@ -6,18 +6,6 @@ namespace CertExpiryMonitor.Tests;
 public sealed class DetailsFormTimeTests
 {
     [Fact]
-    public void SummaryPanelHeightFitsCardsAndFilterRow()
-    {
-        var requiredHeight = DetailsForm.SummaryPanelTopPadding
-                           + DetailsForm.SummaryCardsHeight
-                           + DetailsForm.SummaryControlsTopGap
-                           + DetailsForm.SummaryControlsHeight
-                           + DetailsForm.SummaryPanelBottomPadding;
-
-        Assert.True(DetailsForm.SummaryPanelHeight >= requiredHeight + 2);
-    }
-
-    [Fact]
     public void DetailsFormMinimumClientSizeFitsLowResolutionRdp()
     {
         Assert.True(DetailsForm.MinimumClientWidth <= 560);
@@ -42,6 +30,10 @@ public sealed class DetailsFormTimeTests
     [InlineData("23:60")]
     [InlineData("-1:00")]
     [InlineData("9")]
+    [InlineData("9:00")]
+    [InlineData("12:3")]
+    [InlineData("12:__")]
+    [InlineData(" 09:00 ")]
     public void TryParseDailyTimeRejectsInvalidTimes(string text)
     {
         Assert.False(DetailsForm.TryParseDailyTime(text, out _));

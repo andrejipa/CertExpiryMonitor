@@ -59,28 +59,12 @@ public sealed class JsonSettingsStore
                 return true;
             }
 
-            // Size guard: settings legitimo nunca passa de poucos KB. Se algum
-            // processo do usuario gravar um JSON gigante (DoS persistente, OOM
-            // a cada startup), preservamos e voltamos aos defaults.
-            const long MaxSettingsBytes = 1_048_576;  // 1 MB
-            var info = new FileInfo(_paths.SettingsPath);
-            if (info.Length > MaxSettingsBytes)
-            {
-                _logger.Error(
-                    new InvalidDataException($"settings.json too large ({info.Length} bytes); ignoring"),
-                    "Settings file exceeded size guard");
-                PreserveCorruptFile(_paths.SettingsPath);
-                return false;
-            }
-
-            var json = (_readHooks?.ReadAllText ?? File.ReadAllText)(_paths.SettingsPath);
-            settings = DeserializeSettings(json);
+            settings = ReadExistingSettings();
             return true;
         }
         catch (JsonException ex)
         {
             _logger.Error(ex, "Failed to read settings");
-            PreserveCorruptFile(_paths.SettingsPath);
             return false;
         }
         catch (IOException ex)
@@ -96,7 +80,6 @@ public sealed class JsonSettingsStore
         catch (Exception ex)
         {
             _logger.Error(ex, "Failed to read settings");
-            PreserveCorruptFile(_paths.SettingsPath);
             return false;
         }
         finally
@@ -121,28 +104,32 @@ public sealed class JsonSettingsStore
 
         if (root.ValueKind != JsonValueKind.Object)
         {
-            return new AppSettings();
+            throw new JsonException("Configuracoes devem conter um objeto JSON.");
         }
 
         // Detecta envelope v1+ procurando "settings" case-insensitive.
         // "version" pode vir ausente/string por edicao manual, mas o bloco
         // de settings ainda e aproveitavel e deve prevalecer sobre o parser legado.
         JsonElement? settingsElement = null;
+        var hasVersion = false;
         foreach (var property in root.EnumerateObject())
         {
+            hasVersion |= string.Equals(property.Name, "version", StringComparison.OrdinalIgnoreCase);
             if (string.Equals(property.Name, "settings", StringComparison.OrdinalIgnoreCase))
             {
                 settingsElement = property.Value;
-                break;
             }
         }
 
         if (settingsElement is { } settings)
         {
-            return settings.ValueKind == JsonValueKind.Null
-                ? new AppSettings()
-                : settings.Deserialize<AppSettings>(JsonOptions) ?? new AppSettings();
+            if (settings.ValueKind != JsonValueKind.Object)
+                throw new JsonException("Envelope de configuracoes sem objeto settings valido.");
+            return settings.Deserialize<AppSettings>(JsonOptions)!;
         }
+
+        if (hasVersion)
+            throw new JsonException("Envelope de configuracoes sem settings.");
 
         // Formato legado: AppSettings serializado diretamente.
         return JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? new AppSettings();
@@ -161,6 +148,9 @@ public sealed class JsonSettingsStore
                 _logger.Error(new TimeoutException("Settings file lock timeout"), "Failed to acquire settings file lock");
                 return false;
             }
+
+            // Nao substituir dados ilegíveis por valores de fallback de uma leitura anterior.
+            if (File.Exists(_paths.SettingsPath)) _ = ReadExistingSettings();
 
             var envelope = new SettingsFileEnvelope { Version = CurrentSettingsVersion, Settings = settings };
             var json = JsonSerializer.Serialize(envelope, JsonOptions);
@@ -187,21 +177,12 @@ public sealed class JsonSettingsStore
         DurableFileWriter.WriteAtomic(path, content);
     }
 
-    private void PreserveCorruptFile(string path)
+    // Chamado somente dentro do mutex; preservar o original mantem a falha apos reiniciar.
+    private AppSettings ReadExistingSettings()
     {
-        try
-        {
-            if (!File.Exists(path))
-            {
-                return;
-            }
-
-            var corruptPath = $"{path}.corrupt-{DateTimeOffset.Now:yyyyMMddHHmmss}-{Guid.NewGuid():N}";
-            File.Move(path, corruptPath);
-        }
-        catch (Exception ex)
-        {
-            _logger.Error(ex, "Failed to preserve corrupt settings file");
-        }
+        const long maxSettingsBytes = 1_048_576;
+        if (new FileInfo(_paths.SettingsPath).Length > maxSettingsBytes)
+            throw new InvalidDataException("Arquivo de configuracoes excede o limite de tamanho.");
+        return DeserializeSettings((_readHooks?.ReadAllText ?? File.ReadAllText)(_paths.SettingsPath));
     }
 }

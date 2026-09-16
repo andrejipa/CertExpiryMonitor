@@ -119,7 +119,7 @@ public sealed class PropertyBasedTests
         fixture.StateStore.Save(records);
         var loaded = fixture.StateStore.Load();
 
-        var normalized = JsonStateStore.NormalizeThumbprint(thumbprint);
+        var normalized = CertificateIdentity.NormalizeThumbprint(thumbprint);
         Assert.True(loaded.ContainsKey(normalized));
         Assert.Equal(notAfter, loaded[normalized].NotAfter);
         Assert.Equal(state, loaded[normalized].State);

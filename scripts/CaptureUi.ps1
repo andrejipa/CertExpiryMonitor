@@ -141,7 +141,7 @@ Assert-NoForeignAppProcess $ExePath
 
 $flag = "--$Mode"
 Write-Host "[1/4] Iniciando app com $flag ..."
-$proc = Start-Process -FilePath $ExePath -ArgumentList $flag -PassThru
+$proc = Start-Process -FilePath $ExePath -ArgumentList $flag -PassThru -WindowStyle Hidden
 
 $hwnd = Wait-ForMainWindow $proc $WaitMs
 $mainHwnd = $hwnd

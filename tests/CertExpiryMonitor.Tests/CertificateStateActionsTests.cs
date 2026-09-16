@@ -71,9 +71,10 @@ public sealed class CertificateStateActionsTests : IDisposable
 
         Assert.False(_actions.DismissOne("AA"));
 
-        Assert.False(File.Exists(_paths.StatePath));
-        var preserved = Assert.Single(Directory.GetFiles(_tempDir, "certificate-state.json.corrupt-*"));
-        Assert.Equal(corrupt, File.ReadAllText(preserved));
+        Assert.Equal(corrupt, File.ReadAllText(_paths.StatePath));
+        Assert.Empty(Directory.GetFiles(_tempDir, "certificate-state.json.corrupt-*"));
+        Assert.False(_actions.DismissOne("AA"));
+        Assert.Equal(corrupt, File.ReadAllText(_paths.StatePath));
         Assert.Equal(0, _telemetry.Load().DismissOne);
     }
 

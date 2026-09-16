@@ -192,6 +192,27 @@ public sealed class NotificationCheckCoordinatorTests : IDisposable
         Assert.Equal(expected, new CheckCycleResult(status).ShouldRetry);
     }
 
+    [Theory]
+    [InlineData(CheckCycleStatus.Skipped, false)]
+    [InlineData(CheckCycleStatus.ReadFailed, false)]
+    [InlineData(CheckCycleStatus.CompletedNoDue, true)]
+    [InlineData(CheckCycleStatus.NotificationShown, true)]
+    [InlineData(CheckCycleStatus.NotificationFailed, true)]
+    [InlineData(CheckCycleStatus.StatePersistFailed, true)]
+    [InlineData(CheckCycleStatus.SettingsPersistFailed, true)]
+    public void ResultDistinguishesExecutedCycleFromSkippedOrUnreadableData(CheckCycleStatus status, bool expected)
+    {
+        Assert.Equal(expected, new CheckCycleResult(status).Ran);
+    }
+
+    [Fact]
+    public void FailedReadFeedbackDoesNotClaimSuccessfulVerification()
+    {
+        var result = new CheckCycleResult(CheckCycleStatus.ReadFailed);
+        Assert.Contains("não foi concluída", result.ManualFeedback);
+        Assert.DoesNotContain("Nenhum novo aviso", result.ManualFeedback);
+    }
+
     [Fact]
     public void SettingsSaveFailureIsReportedAfterSuccessfulCheck()
     {
@@ -372,6 +393,56 @@ public sealed class NotificationCheckCoordinatorTests : IDisposable
             new ExpiryEvaluator(),
             _logger);
         return new NotificationCheckCoordinator(settingsStore, check, _logger);
+    }
+
+    [Fact]
+    public void RepeatedManualCheckDoesNotDuplicateOrClaimCertificateIsOutsideExpiryWindow()
+    {
+        var coordinator = CreateCoordinator([DueCertificate()], out _, out _);
+        var notifications = 0;
+        var first = coordinator.Run(new CheckCycleRequest(true, true), _ => { notifications++; return true; });
+        var second = coordinator.Run(new CheckCycleRequest(true, true), _ => { notifications++; return true; });
+
+        Assert.Equal(CheckCycleStatus.NotificationShown, first.Status);
+        Assert.Equal(CheckCycleStatus.CompletedNoDue, second.Status);
+        Assert.Equal(1, notifications);
+        Assert.Equal("Nenhum novo aviso pendente. Consulte os certificados monitorados.", second.ManualFeedback);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void CorruptSourceRemainsBlockedAcrossCyclesAndNewCoordinator(bool corruptSettings)
+    {
+        var settingsStore = new JsonSettingsStore(_paths, _logger);
+        var stateStore = new JsonStateStore(_paths, _logger);
+        Assert.True(settingsStore.Save(new AppSettings { DailyCheckTime = new TimeSpan(12, 30, 0) }));
+        Assert.True(stateStore.Save(new Dictionary<string, CertificateStateRecord>()));
+        var corruptPath = corruptSettings ? _paths.SettingsPath : _paths.StatePath;
+        var otherPath = corruptSettings ? _paths.StatePath : _paths.SettingsPath;
+        var otherBytes = File.ReadAllBytes(otherPath);
+        File.WriteAllText(corruptPath, "{invalid");
+        var notifications = 0;
+
+        for (var restart = 0; restart < 2; restart++)
+        {
+            var settings = new JsonSettingsStore(_paths, _logger);
+            var state = new JsonStateStore(_paths, _logger);
+            var service = new CertificateCheckService(settings, state,
+                new FixedCertificateReader(_logger, [DueCertificate()]), new ExpiryEvaluator(), _logger);
+            var coordinator = new NotificationCheckCoordinator(settings, service, _logger);
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                var result = coordinator.Run(new CheckCycleRequest(true, true), _ => { notifications++; return true; });
+                Assert.Equal(CheckCycleStatus.ReadFailed, result.Status);
+                Assert.True(result.ShouldRetry);
+                Assert.NotNull(result.ManualFeedback);
+            }
+        }
+
+        Assert.Equal(0, notifications);
+        Assert.Equal("{invalid", File.ReadAllText(corruptPath));
+        Assert.Equal(otherBytes, File.ReadAllBytes(otherPath));
     }
 
     private static CertificateSnapshot DueCertificate() =>

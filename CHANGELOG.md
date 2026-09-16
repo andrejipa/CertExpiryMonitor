@@ -5,6 +5,29 @@ Todas as mudanças notáveis neste projeto. Formato baseado em
 
 ---
 
+## [1.0.11] — 2026-09-16
+
+### Corrigido
+
+- Salvar configurações preserva o horário carregado, inclusive quando contém zeros; alterar outras preferências não muda a agenda silenciosamente.
+- Arquivos de estado e configurações corrompidos continuam sinalizando falha nas leituras seguintes, sem se transformar em dados vazios ou padrões salváveis.
+- A verificação manual distingue ausência de novos avisos da ausência de certificados próximos do vencimento.
+- Atualizações pelo instalador preservam a preferência de startup desligado; o registro é aplicado pelo app somente após ler as configurações com sucesso.
+
+### Melhorado
+
+- Interface de certificados e configurações com layout adaptável, feedback visível, filtros coerentes com os cartões de resumo e navegação por teclado.
+- Normalização da identidade do certificado separada da persistência, mantendo compatibilidade dos dados existentes.
+- Contratos textuais redundantes substituídos pela cobertura de comportamento existente; preservadas verificações estáticas de instalador, CI e durabilidade física.
+- Publicação com instalador exige Inno Setup antes de alterar versões e valida o diretório antes de limpar o publish anterior.
+- Documentação atualizada para persistência DPAPI v2, gravação durável e salvamento transacional de configurações.
+
+### Validação
+
+- Os resultados desta versão e os hashes dos artefatos acompanham a entrega; métricas históricas abaixo pertencem às versões indicadas.
+
+---
+
 ## [1.0.10] — 2026-07-10
 
 ### Melhorado

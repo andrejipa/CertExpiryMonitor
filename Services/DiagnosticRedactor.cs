@@ -1,3 +1,4 @@
+using CertExpiryMonitor.Models;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -53,7 +54,7 @@ internal static class DiagnosticRedactor
 
     public static string HashThumbprint(string? thumbprint)
     {
-        var normalized = JsonStateStore.NormalizeThumbprint(thumbprint ?? string.Empty);
+        var normalized = CertificateIdentity.NormalizeThumbprint(thumbprint ?? string.Empty);
         if (normalized.Length == 0) return string.Empty;
 
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(normalized));
@@ -183,7 +184,7 @@ internal static class DiagnosticRedactor
         value = ThumbprintAssignmentRegex.Replace(value, match => $"{match.Groups["name"].Value}=(redacted-thumbprint)");
         value = CertificatePrefixRegex.Replace(value, match => $"{match.Groups["label"].Value} (redacted-thumbprint-prefix)");
 
-        var normalized = JsonStateStore.NormalizeThumbprint(value);
+        var normalized = CertificateIdentity.NormalizeThumbprint(value);
         if (normalized.Length >= 40 && normalized.All(Uri.IsHexDigit))
         {
             return $"sha256:{HashThumbprint(normalized)}";

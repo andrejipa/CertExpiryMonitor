@@ -35,9 +35,11 @@ em `diagnostics.db`.
 | `Services/ExpiryEvaluator.cs` | Decisão de bucket, `BuildPlan` / `BuildReminderPlan` |
 | `Services/ToastNotifierService.cs` | Toast XML via WinRT unpackaged, atalho COM, toast compacto de lembrete |
 | `Services/DetailsForm.cs` | Janela de detalhes + configurações; delega helpers para `CertificateDocumentHelpers` |
+| `Services/DetailsDataLoader.cs` / `Models/DetailsLoadResult.cs` | Carrega fontes independentemente; distingue configurações, histórico e certificados indisponíveis para a UI |
+| `Models/CertificateIdentity.cs` | Normalização pura compartilhada de thumbprint; wrapper público do store mantido por compatibilidade |
 | `Services/CertificateDocumentHelpers.cs` | `FormatDocument`, `ParseHolder`, `GetCommonNameFallback` (interno + testável) |
 | `Services/CertificateStatusHelpers.cs` | `GetStatusText`, `GetStatusCategory` para a grade — recebem `ExpiryThresholds` (interno + testável) |
-| `Services/JsonStateStore.cs` | Lê/salva estado com envelope versionado; suporta formato legado (array puro) |
+| `Services/JsonStateStore.cs` | Lê/salva estado com envelope DPAPI v2 por usuário; lê legados array e envelope v1 |
 | `Services/JsonSettingsStore.cs` | Lê/salva AppSettings |
 | `Services/DiagnosticEventStore.cs` | SQLite local `diagnostics.db`: eventos técnicos mínimos, observações redigidas de certificados, retenção |
 | `Services/DiagnosticRedactor.cs` | Redige detalhes antes de persistir diagnóstico estruturado |
@@ -61,7 +63,7 @@ em `diagnostics.db`.
 | `Models/AppSettings.LogFormat` | Enum `Text`/`Json` para formato do `monitor.log` |
 | `Models/AppSettings.EventLogEnabled` | Espelha ERROR para Windows Event Log |
 | `Models/AppSettings.TelemetryEnabled` | Liga/desliga coleta de telemetria local |
-| `tests/…/ExpiryEvaluatorTests.cs` | 19 testes de lógica de notificação (thresholds padrão) |
+| `tests/…/ExpiryEvaluatorTests.cs` | Testes de lógica de notificação (thresholds padrão) |
 | `tests/…/ExpiryEvaluatorThresholdsTests.cs` | Testes com thresholds customizados |
 | `tests/…/JsonStateStoreTests.cs` | Persistência, migração de formato legado, robustez |
 | `tests/…/ExpiryThresholdsTests.cs` | `Normalized()` com valores inválidos / invertidos |
@@ -108,7 +110,7 @@ em `diagnostics.db`.
 
 1. Adicionar propriedade em `Models/AppSettings.cs` com valor padrão.
 2. Expor na aba de configurações em `Services/DetailsForm.cs` (`BuildSettingsTab`).
-3. Adicionar callback `SaveXxx` em `TrayApplicationContext.cs` e passá-lo via `DetailsFormOptions`.
+3. Incluir o campo em `DetailsSettingsUpdate` e no planejamento transacional; usar o callback único `DetailsFormOptions.SaveSettings`, aplicado por `SettingsUpdateCoordinator`.
 4. Escrever teste de round-trip em `JsonStateStoreTests.cs` ou equivalente.
 
 ## Como rodar os testes
@@ -149,8 +151,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-BugHunt.ps1 -Maximum -Kee
 | ~~`CertificateNotificationState` enum semantic~~ | Resolvido | Valores `Notified30/15/7/1` renomeados para `NotifiedLong/Medium/Short/Urgent`. Valores numéricos do enum (30, 15, 7, 1, 999) preservados para compat JSON. |
 | Automacao direta de `TrayApplicationContext` limitada | Baixo | `DetailsForm` possui integracao STA; o host da bandeja e coberto pelos colaboradores extraidos e pelo BugHunt/UIA em Windows real. |
 | ~~Race mutex/events em `Program.cs`~~ | Verificado | Falso positivo. `AutoReset` sem waiter mantém estado signaled até alguém esperar (Win32 spec). `HandleActivationRequests` drena via `WaitOne(0)` no timer 500ms. Sinal não é perdido. |
-| `JsonStateStore`/`JsonSettingsStore` temp-file não-fsync | Baixo | `File.Move` em primeira escrita não força flush; crash brusco do SO pode perder o arquivo. Próximo save recria. |
-| `.bak` files em `%LOCALAPPDATA%\CertExpiryMonitor` | Baixo | `File.Replace` sobrescreve a cada save — máximo 2 arquivos. Não acumulam, mas tampouco são removidos. |
+| Escrita durável depende do dispositivo | Baixo | `DurableFileWriter` usa `WriteThrough` e `Flush(true)` antes de replace/move; falhas extremas ainda dependem do filesystem e hardware. |
+| Backup transitório em persistência | Baixo | O writer limpa o backup quando solicitado pelo store; estado DPAPI não deve deixar backup legível após migração. |
 | Versão duplicada no `.csproj` e `.iss` | Baixo | Mitigado por `scripts/Publish-Release.ps1`. Risco subsiste em edição manual. |
 | Navegação por teclado completa em `DetailsForm` | Baixo | `AccessibleName`/`AccessibleDescription` agora setados nos controles principais; navegação Tab/Enter ainda não auditada manualmente. |
 | Dark mode | Baixo | Disponível apenas em .NET 9+ (`Application.SetColorMode`). Postergado até upgrade. |
