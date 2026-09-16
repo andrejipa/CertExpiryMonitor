@@ -280,7 +280,7 @@ public sealed class CertificateCheckService
             certificates
                 .Select(c => new
                 {
-                    Thumbprint = JsonStateStore.NormalizeThumbprint(c.Thumbprint),
+                    Thumbprint = CertificateIdentity.NormalizeThumbprint(c.Thumbprint),
                     c.NotAfter
                 })
                 .Where(c => c.Thumbprint.Length > 0)

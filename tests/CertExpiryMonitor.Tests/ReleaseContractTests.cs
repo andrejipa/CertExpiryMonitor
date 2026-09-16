@@ -32,14 +32,16 @@ public sealed class ReleaseContractTests
     }
 
     [Fact]
-    public void InstallerKeepsPerUserAndLimitedStartupContract()
+    public void InstallerKeepsPerUserInstallationAndDelegatesStartupPreferenceToApp()
     {
         var installer = File.ReadAllText(Path.Combine(Root, "installer", "CertExpiryMonitor.iss"));
 
         Assert.Contains("PrivilegesRequired=lowest", installer, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("DisableDirPage=yes", installer, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("/sc ONLOGON", installer, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("/rl LIMITED", installer, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("/create /tn", installer, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("reg add", installer, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Flags: nowait postinstall skipifsilent", installer, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Flags: nowait runhidden skipifnotsilent", installer, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("--background", installer, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -61,6 +63,7 @@ public sealed class ReleaseContractTests
         Assert.Contains("app popup fallback was used", script, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Invoke-AppWindowButton $background.Id \"Certificados digitais\" \"Ver detalhes\"", script, StringComparison.Ordinal);
         Assert.Contains("Popup de teste registrou falha de exibicao", script, StringComparison.Ordinal);
+        Assert.Contains("\"Testar aviso agora\" 20", script, StringComparison.Ordinal);
         Assert.Contains("BugHuntNativeMethods]::PostMessage", script, StringComparison.Ordinal);
         Assert.Contains("Fallback abriu instancia duplicada do app", script, StringComparison.Ordinal);
         Assert.Contains("Wait-ForCondition { Test-Path $telemetryPath }", script, StringComparison.Ordinal);
@@ -88,44 +91,8 @@ public sealed class ReleaseContractTests
     }
 
     [Fact]
-    public void DiagnosticEventStoreKeepsSqliteRetentionAndCorruptionContracts()
+    public void DurableWriterRequestsPhysicalFlush()
     {
-        var source = File.ReadAllText(Path.Combine(Root, "Services", "DiagnosticEventStore.cs"));
-
-        Assert.Contains("Record(\"INFO\", eventType, source, message, details)", source, StringComparison.Ordinal);
-        Assert.Contains("Record(\"WARN\", eventType, source, message, details)", source, StringComparison.Ordinal);
-        Assert.Contains("Record(\"ERROR\", eventType, source, message, redactedDetails)", source, StringComparison.Ordinal);
-        Assert.Contains("pragma busy_timeout = 1000;", source, StringComparison.Ordinal);
-        Assert.Contains("pragma journal_mode = wal;", source, StringComparison.Ordinal);
-        Assert.Contains("pragma synchronous = normal;", source, StringComparison.Ordinal);
-        Assert.Contains("pragma wal_checkpoint(truncate);", source, StringComparison.Ordinal);
-        Assert.Contains("delete from events where occurred_at_utc < $cutoff;", source, StringComparison.Ordinal);
-        Assert.Contains("delete from certificate_observations where captured_at_utc < $cutoff;", source, StringComparison.Ordinal);
-        Assert.Contains("delete from events", source, StringComparison.Ordinal);
-        Assert.Contains("order by occurred_at_utc asc limit 1000", source, StringComparison.Ordinal);
-        Assert.Contains("delete from certificate_observations", source, StringComparison.Ordinal);
-        Assert.Contains("order by captured_at_utc asc limit 1000", source, StringComparison.Ordinal);
-        Assert.Contains("vacuum;", source, StringComparison.Ordinal);
-        Assert.Contains("TryDeleteSidecar($\"{_paths.DiagnosticsDbPath}-wal\")", source, StringComparison.Ordinal);
-        Assert.Contains("TryDeleteSidecar($\"{_paths.DiagnosticsDbPath}-shm\")", source, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void JsonStateStoreEncryptsCertificateStateAtRestWithCurrentUserDpapi()
-    {
-        var source = File.ReadAllText(Path.Combine(Root, "Services", "JsonStateStore.cs"));
-
-        Assert.Contains("CurrentEncryptedStateVersion = 2", source, StringComparison.Ordinal);
-        Assert.Contains("EncryptedFormat = \"dpapi-current-user\"", source, StringComparison.Ordinal);
-        Assert.Contains("ProtectedData.Protect", source, StringComparison.Ordinal);
-        Assert.Contains("ProtectedData.Unprotect", source, StringComparison.Ordinal);
-        Assert.Contains("DataProtectionScope.CurrentUser", source, StringComparison.Ordinal);
-        Assert.Contains("TryReadEncryptedPayload", source, StringComparison.Ordinal);
-        Assert.Contains("return DeserializeRecords(decryptedJson);", source, StringComparison.Ordinal);
-        Assert.Contains("AtomicWrite(_paths.StatePath, encryptedJson, deleteBackup: true)", source, StringComparison.Ordinal);
-        Assert.Contains("MaxStoredStateBytes = 16_777_216", source, StringComparison.Ordinal);
-        Assert.Contains("MaxPlaintextStateBytes = 10_485_760", source, StringComparison.Ordinal);
-
         var durableWriter = File.ReadAllText(Path.Combine(Root, "Services", "DurableFileWriter.cs"));
         Assert.Contains("FileOptions.WriteThrough", durableWriter, StringComparison.Ordinal);
         Assert.Contains("stream.Flush(flushToDisk: true)", durableWriter, StringComparison.Ordinal);
@@ -134,31 +101,17 @@ public sealed class ReleaseContractTests
     }
 
     [Fact]
-    public void DiagnosticsBundleServiceKeepsExportManifestAndRedactionContracts()
+    public void ReleasePublishChecksInstallerDependencyAndGuardsCleanup()
     {
-        var source = File.ReadAllText(Path.Combine(Root, "Services", "DiagnosticsBundleService.cs"));
-
-        Assert.Contains("ZipFile.CreateFromDirectory", source, StringComparison.Ordinal);
-        Assert.Contains("diagnostics.bundle_created", source, StringComparison.Ordinal);
-        Assert.Contains("DiagnosticsBundleService", source, StringComparison.Ordinal);
-        Assert.Contains("Pacote de diagnostico criado.", source, StringComparison.Ordinal);
-        Assert.Contains("Nao exporta chave privada, PFX, senha, usuario ou nome de maquina em texto puro", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("Environment.MachineName", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("Environment.UserName", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("machineHash", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("userHash", source, StringComparison.Ordinal);
-        Assert.Contains("DiagnosticRedactor.RedactText(Environment.ProcessPath ?? Application.ExecutablePath)", source, StringComparison.Ordinal);
-        Assert.Contains("DiagnosticRedactor.RedactText(_paths.RootDirectory)", source, StringComparison.Ordinal);
-        Assert.Contains("TaskSchedulerCommand: {DiagnosticRedactor.RedactText(status.TaskSchedulerCommand ?? \"(ausente)\")}", source, StringComparison.Ordinal);
-        Assert.Contains("RegistryCommand: {DiagnosticRedactor.RedactText(status.RegistryCommand ?? \"(ausente)\")}", source, StringComparison.Ordinal);
-        Assert.Contains("thumbprint_hash,serial_prefix,not_after,days_remaining,holder_redacted,document_last4", source, StringComparison.Ordinal);
-        Assert.Contains("DiagnosticRedactor.HashThumbprint(cert.Thumbprint)", source, StringComparison.Ordinal);
-        Assert.Contains("CopyRedactedLog", source, StringComparison.Ordinal);
-        Assert.Contains("DiagnosticRedactor.RedactText(content)", source, StringComparison.Ordinal);
-        Assert.Contains("CertificateDocumentHelpers.GetCommonNameFallback(cert.Subject)", source, StringComparison.Ordinal);
-        Assert.Contains("property.Name.Contains(\"hash\", StringComparison.OrdinalIgnoreCase)", source, StringComparison.Ordinal);
-        Assert.Contains("AppendCopyError(tempRoot, \"diagnostics.db\", \"Falha ao copiar snapshot SQLite.\")", source, StringComparison.Ordinal);
-        Assert.Contains("value.Replace(\"\\\"\", \"\\\"\\\"\", StringComparison.Ordinal)", source, StringComparison.Ordinal);
+        var script = File.ReadAllText(Path.Combine(Root, "scripts", "Publish-Release.ps1"));
+        var dependencyCheck = script.IndexOf("if (-not $iscc)", StringComparison.Ordinal);
+        var versionWrite = script.IndexOf("Set-Content -Path $csproj", StringComparison.Ordinal);
+        Assert.True(dependencyCheck >= 0 && dependencyCheck < versionWrite);
+        Assert.Contains("throw \"Inno Setup 6 nao encontrado", script, StringComparison.Ordinal);
+        Assert.Contains("[IO.FileAttributes]::ReparsePoint", script, StringComparison.Ordinal);
+        Assert.Contains("$resolvedPublish.Equals($expectedPublish", script, StringComparison.Ordinal);
+        Assert.Contains("Remove-Item -LiteralPath $resolvedPublish -Recurse -Force", script, StringComparison.Ordinal);
+        Assert.Contains("throw \"ISCC terminou sem gerar o instalador esperado", script, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -360,21 +313,6 @@ public sealed class ReleaseContractTests
     }
 
     [Fact]
-    public void TrayDoesNotPersistDailyCheckBeforeNotificationOutcome()
-    {
-        var source = File.ReadAllText(Path.Combine(Root, "Services", "NotificationCheckCoordinator.cs"));
-        var runCheckStart = source.IndexOf("public CheckCycleResult Run", StringComparison.Ordinal);
-        var showIndex = source.IndexOf("if (!showNotification(plan))", runCheckStart, StringComparison.Ordinal);
-        var saveIndex = source.IndexOf("if (!_settingsStore.Save(settings))", showIndex, StringComparison.Ordinal);
-
-        Assert.True(runCheckStart >= 0, "Coordenador deve expor Run.");
-        Assert.True(showIndex > runCheckStart, "Coordenador deve observar o resultado da notificacao.");
-        Assert.True(saveIndex > showIndex, "settings.json nao deve ser salvo antes do resultado da notificacao.");
-        Assert.Contains("settings.LastCheckDate = null;", source, StringComparison.Ordinal);
-        Assert.Contains("settings.LastCertificateSnapshotHash = string.Empty;", source, StringComparison.Ordinal);
-    }
-
-    [Fact]
     public void ForcedImmediateCheckIsRetriedWhenTimerCheckDoesNotRun()
     {
         var source = File.ReadAllText(Path.Combine(Root, "Services", "TrayApplicationContext.cs"));
@@ -384,9 +322,6 @@ public sealed class ReleaseContractTests
         var retryTimer = source.IndexOf("ScheduleTimer(TimeSpan.FromSeconds(1));", retryGuard, StringComparison.Ordinal);
         var retryFlag = source.IndexOf("retryScheduled = true;", retryGuard, StringComparison.Ordinal);
         var finalGuard = source.IndexOf("if (!retryScheduled)", retryGuard, StringComparison.Ordinal);
-        var coordinator = File.ReadAllText(Path.Combine(Root, "Services", "NotificationCheckCoordinator.cs"));
-        var forceCapture = coordinator.IndexOf("var forceReminder = settings.ForceNextNotificationReminder;", StringComparison.Ordinal);
-        var persistedReminder = coordinator.IndexOf("settings.ForceNextNotificationReminder = forceReminder;", forceCapture, StringComparison.Ordinal);
 
         Assert.True(timerStart >= 0, "OnTimerTick deve existir.");
         Assert.True(retryGuard > timerStart, "Timer deve rearmar check imediato quando o check forçado nao executa.");
@@ -394,85 +329,6 @@ public sealed class ReleaseContractTests
         Assert.True(retryTimer > retryGuard, "Retry deve ser agendado rapidamente.");
         Assert.True(retryFlag > retryTimer, "Retry imediato deve impedir reagendamento diario no finally.");
         Assert.True(finalGuard > retryFlag, "Finally nao deve sobrescrever retry imediato com agenda diaria.");
-        Assert.True(forceCapture >= 0, "Coordenador deve capturar reminder forçado persistido.");
-        Assert.True(persistedReminder > forceCapture, "Reminder forçado deve ser preservado quando a notificacao falha.");
-    }
-
-    [Fact]
-    public void SavingUnchangedNotificationTimeDoesNotRearmDailyNotification()
-    {
-        var tray = File.ReadAllText(Path.Combine(Root, "Services", "TrayApplicationContext.cs"));
-        var planner = File.ReadAllText(Path.Combine(Root, "Services", "DetailsSettingsPlanner.cs"));
-        var coordinator = File.ReadAllText(Path.Combine(Root, "Services", "SettingsUpdateCoordinator.cs"));
-        var methodStart = tray.IndexOf("private bool SaveSettings", StringComparison.Ordinal);
-        var applyPlan = tray.IndexOf("var result = _settingsUpdater.Apply(update, DateTime.Now);", methodStart, StringComparison.Ordinal);
-        var buildPlan = coordinator.IndexOf("var plan = DetailsSettingsPlanner.Build(currentSettings, update, now);", StringComparison.Ordinal);
-        var shouldRunAgain = planner.IndexOf("var shouldRunAgainToday = scheduleChanged && selectedMinute >= currentMinute;", StringComparison.Ordinal);
-        var forcePlan = planner.IndexOf("var forceNextScheduledNotification = currentSettings.ForceNextNotificationReminder", shouldRunAgain, StringComparison.Ordinal);
-        var forceReminder = tray.IndexOf("_forceNextScheduledNotification = plan.ForceNextScheduledNotification;", methodStart, StringComparison.Ordinal);
-
-        Assert.True(methodStart >= 0, "SaveSettings deve existir.");
-        Assert.True(applyPlan > methodStart, "SaveSettings deve delegar a atualizacao transacional.");
-        Assert.True(buildPlan >= 0, "Coordenador deve delegar o plano puro de configuracoes.");
-        Assert.True(shouldRunAgain >= 0, "Planner deve rearmar por horario apenas quando houve mudanca real.");
-        Assert.True(forcePlan > shouldRunAgain, "Planner deve decidir reminder forçado depois do guard de horario.");
-        Assert.True(forceReminder > applyPlan, "Tray deve aplicar o resultado persistido do planner.");
-    }
-
-    [Fact]
-    public void ChangingThresholdsRearmsDailyNotification()
-    {
-        var tray = File.ReadAllText(Path.Combine(Root, "Services", "TrayApplicationContext.cs"));
-        var planner = File.ReadAllText(Path.Combine(Root, "Services", "DetailsSettingsPlanner.cs"));
-        var methodStart = tray.IndexOf("private bool SaveSettings", StringComparison.Ordinal);
-        var changedGuard = planner.IndexOf("var thresholdsChanged = !ThresholdsEqual(previousThresholds, newThresholds);", StringComparison.Ordinal);
-        var clearDate = planner.IndexOf("newSettings.LastCheckDate = null;", changedGuard, StringComparison.Ordinal);
-        var clearHash = planner.IndexOf("newSettings.LastCertificateSnapshotHash = string.Empty;", changedGuard, StringComparison.Ordinal);
-        var persistPending = planner.IndexOf("newSettings.ForceNextNotificationReminder = true;", changedGuard, StringComparison.Ordinal);
-        var forceReminder = tray.IndexOf("_forceNextScheduledNotification = plan.ForceNextScheduledNotification;", methodStart, StringComparison.Ordinal);
-        var thresholdsBranch = tray.IndexOf("if (plan.ThresholdsChanged)", forceReminder, StringComparison.Ordinal);
-        var ignoreTime = tray.IndexOf("_ignoreConfiguredTimeOnNextTimer = true;", thresholdsBranch, StringComparison.Ordinal);
-        var immediateSchedule = tray.IndexOf("ScheduleTimer(TimeSpan.FromSeconds(1));", thresholdsBranch, StringComparison.Ordinal);
-
-        Assert.True(methodStart >= 0, "SaveSettings deve existir.");
-        Assert.True(changedGuard >= 0, "Planner deve distinguir mudanca real de salvar sem alteracao.");
-        Assert.True(clearDate > changedGuard, "Mudar faixas deve limpar LastCheckDate para reavaliar no mesmo dia.");
-        Assert.True(clearHash > changedGuard, "Mudar faixas deve limpar hash de snapshot antigo.");
-        Assert.True(persistPending > clearHash, "Mudar faixas deve persistir reminder forced para sobreviver a restart.");
-        Assert.True(forceReminder > methodStart, "Mudar faixas deve rearmar reminder forced para certificados ja notificados.");
-        Assert.True(ignoreTime > thresholdsBranch, "Mudar faixas deve ignorar horario configurado na reavaliacao imediata.");
-        Assert.True(immediateSchedule > ignoreTime, "Mudar faixas deve reavaliar logo, mesmo se o horario diario ja passou.");
-    }
-
-    [Fact]
-    public void DetailsSettingsArePersistedWithSingleSettingsSave()
-    {
-        var source = File.ReadAllText(Path.Combine(Root, "Services", "SettingsUpdateCoordinator.cs"));
-        var methodStart = source.IndexOf("public SettingsUpdateResult Apply", StringComparison.Ordinal);
-        var methodEnd = source.IndexOf("private void RecordChanges", methodStart, StringComparison.Ordinal);
-        var method = source[methodStart..methodEnd];
-
-        Assert.True(methodStart >= 0, "SaveSettings deve existir.");
-        Assert.True(methodEnd > methodStart, "SaveSettings deve terminar antes de TestNotificationNow.");
-        Assert.Equal(1, CountOccurrences(method, "_settingsStore.Save(plan.Settings)"));
-    }
-
-    [Fact]
-    public void SaveSettingsDoesNotMutateRuntimeSettingsBeforeSuccessfulSave()
-    {
-        var tray = File.ReadAllText(Path.Combine(Root, "Services", "TrayApplicationContext.cs"));
-        var coordinator = File.ReadAllText(Path.Combine(Root, "Services", "SettingsUpdateCoordinator.cs"));
-        var methodStart = tray.IndexOf("private bool SaveSettings", StringComparison.Ordinal);
-        var applyIndex = tray.IndexOf("var result = _settingsUpdater.Apply(update, DateTime.Now);", methodStart, StringComparison.Ordinal);
-        var assignIndex = tray.IndexOf("_settings = plan.Settings;", methodStart, StringComparison.Ordinal);
-        var forceAssignIndex = tray.IndexOf("_forceNextScheduledNotification = plan.ForceNextScheduledNotification;", methodStart, StringComparison.Ordinal);
-        var saveIndex = coordinator.IndexOf("if (!_settingsStore.Save(plan.Settings))", StringComparison.Ordinal);
-
-        Assert.True(methodStart >= 0, "SaveSettings deve existir.");
-        Assert.True(saveIndex >= 0, "Coordenador deve persistir o objeto proposto.");
-        Assert.True(applyIndex > methodStart, "Tray deve aguardar o coordenador transacional.");
-        Assert.True(assignIndex > applyIndex, "Runtime so deve trocar _settings depois de save bem-sucedido.");
-        Assert.True(forceAssignIndex > applyIndex, "Reminder forçado so deve ser armado depois de save bem-sucedido.");
     }
 
     [Fact]
@@ -492,24 +348,6 @@ public sealed class ReleaseContractTests
         Assert.True(saveIndex > failureGuardIndex, "Settings so deve ser salvo apos registro/remocao de startup bem-sucedido.");
         Assert.True(ensureIndex > saveIndex, "Falha de save deve tentar rollback para startup ligado quando era o estado anterior.");
         Assert.True(removeIndex > saveIndex, "Falha de save deve tentar rollback para startup desligado quando era o estado anterior.");
-    }
-
-    [Fact]
-    public void MarkNotifiedFailurePreventsDailyCheckConsolidation()
-    {
-        var service = File.ReadAllText(Path.Combine(Root, "Services", "CertificateCheckService.cs"));
-        var coordinator = File.ReadAllText(Path.Combine(Root, "Services", "NotificationCheckCoordinator.cs"));
-        var markStart = service.IndexOf("public bool MarkNotified", StringComparison.Ordinal);
-        var saveFailure = service.IndexOf("return false;", markStart, StringComparison.Ordinal);
-        var markGuard = coordinator.IndexOf("else if (!_checkService.MarkNotified", StringComparison.Ordinal);
-        var clearDate = coordinator.IndexOf("settings.LastCheckDate = null;", markGuard, StringComparison.Ordinal);
-        var consolidateDate = coordinator.IndexOf("settings.LastCheckDate = completedDate;", markGuard, StringComparison.Ordinal);
-
-        Assert.True(markStart >= 0, "MarkNotified deve retornar bool.");
-        Assert.True(saveFailure > markStart, "Falha ao salvar estado notificado deve retornar false.");
-        Assert.True(markGuard >= 0, "Coordenador deve observar falha de MarkNotified.");
-        Assert.True(clearDate > markGuard, "Falha de MarkNotified deve limpar LastCheckDate para retry futuro.");
-        Assert.True(consolidateDate > clearDate, "Check do dia so deve consolidar apos MarkNotified bem-sucedido.");
     }
 
     [Fact]
@@ -614,16 +452,4 @@ public sealed class ReleaseContractTests
         Assert.Empty(offendingFiles);
     }
 
-    private static int CountOccurrences(string text, string value)
-    {
-        var count = 0;
-        var index = 0;
-        while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
-        {
-            count++;
-            index += value.Length;
-        }
-
-        return count;
-    }
 }

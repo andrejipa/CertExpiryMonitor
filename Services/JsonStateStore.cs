@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -69,26 +68,12 @@ public sealed class JsonStateStore
                 return true;
             }
 
-            // Size guard: state legitimo cresce ~200B por cert; 10MB suporta dezenas
-            // de milhares de registros. O envelope DPAPI/base64 tem overhead, por isso
-            // o limite em disco e maior que o limite do JSON claro depois de descriptar.
-            var info = new FileInfo(_paths.StatePath);
-            if (info.Length > MaxStoredStateBytes)
-            {
-                _logger.Error(
-                    new InvalidDataException($"certificate-state.json too large ({info.Length} bytes); ignoring"),
-                    "State file exceeded size guard");
-                PreserveCorruptFile(_paths.StatePath);
-                return false;
-            }
-
-            var json = (_readHooks?.ReadAllText ?? File.ReadAllText)(_paths.StatePath);
-            var records = DeserializeRecords(json);
+            var records = ReadExistingRecords();
 
             state = records
                 .Select(record => new
                 {
-                    Thumbprint = NormalizeThumbprint(record.Thumbprint ?? string.Empty),
+                    Thumbprint = CertificateIdentity.NormalizeThumbprint(record.Thumbprint ?? string.Empty),
                     Record = record
                 })
                 .Where(item => item.Thumbprint.Length > 0)
@@ -107,7 +92,6 @@ public sealed class JsonStateStore
         catch (JsonException ex)
         {
             _logger.Error(ex, "Failed to read certificate state");
-            PreserveCorruptFile(_paths.StatePath);
             return false;
         }
         catch (IOException ex)
@@ -123,7 +107,6 @@ public sealed class JsonStateStore
         catch (Exception ex)
         {
             _logger.Error(ex, "Failed to read certificate state");
-            PreserveCorruptFile(_paths.StatePath);
             return false;
         }
         finally
@@ -150,12 +133,15 @@ public sealed class JsonStateStore
                 return false;
             }
 
+            // Revalidar sob o mesmo mutex antes de substituir dados persistidos.
+            if (File.Exists(_paths.StatePath)) _ = ReadExistingRecords();
+
             var records = state
                 .Values
                 .Where(record => record is not null)
                 .Select(record => new
                 {
-                    Thumbprint = NormalizeThumbprint(record.Thumbprint ?? string.Empty),
+                    Thumbprint = CertificateIdentity.NormalizeThumbprint(record.Thumbprint ?? string.Empty),
                     Record = record
                 })
                 .Where(item => item.Thumbprint.Length > 0)
@@ -196,19 +182,21 @@ public sealed class JsonStateStore
         }
     }
 
-    private static List<CertificateStateRecord> DeserializeRecords(string json)
+    private static List<CertificateStateRecord> DeserializeRecords(string json, bool allowEncrypted = true)
     {
         using var doc = JsonDocument.Parse(json);
         if (doc.RootElement.ValueKind == JsonValueKind.Array)
         {
             // Formato legado: lista na raiz (versao anterior ao envelope).
-            return JsonSerializer.Deserialize<List<CertificateStateRecord>>(json, JsonOptions) ?? [];
+            return ReadRecordsArray(doc.RootElement);
         }
 
         if (TryReadEncryptedPayload(doc.RootElement, out var encryptedPayload))
         {
+            if (!allowEncrypted)
+                throw new JsonException("Envelope criptografado aninhado nao e permitido.");
             var decryptedJson = DecryptStateJson(encryptedPayload);
-            return DeserializeRecords(decryptedJson);
+            return DeserializeRecords(decryptedJson, allowEncrypted: false);
         }
 
         // Formato legado v1: { "version": N, "records": [...] }. A propriedade
@@ -223,13 +211,21 @@ public sealed class JsonStateStore
                     continue;
                 }
 
-                return property.Value.ValueKind == JsonValueKind.Null
-                    ? []
-                    : property.Value.Deserialize<List<CertificateStateRecord>>(JsonOptions) ?? [];
+                return ReadRecordsArray(property.Value);
             }
         }
 
-        return [];
+        throw new JsonException("Estado sem lista de registros reconhecida.");
+    }
+
+    private static List<CertificateStateRecord> ReadRecordsArray(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Array)
+            throw new JsonException("Registros devem ser uma lista.");
+        var records = element.Deserialize<List<CertificateStateRecord>>(JsonOptions)!;
+        if (records.Any(record => record is null))
+            throw new JsonException("Registro de certificado nulo.");
+        return records;
     }
 
     private static string EncryptStateJson(string plaintextJson)
@@ -272,34 +268,32 @@ public sealed class JsonStateStore
         }
 
         var isEncrypted = false;
+        var hasEnvelopeMarker = false;
         foreach (var property in root.EnumerateObject())
         {
-            if (string.Equals(property.Name, "format", StringComparison.OrdinalIgnoreCase) &&
-                property.Value.ValueKind == JsonValueKind.String &&
-                string.Equals(property.Value.GetString(), EncryptedFormat, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(property.Name, "format", StringComparison.OrdinalIgnoreCase))
             {
-                isEncrypted = true;
+                hasEnvelopeMarker = true;
+                isEncrypted = property.Value.ValueKind == JsonValueKind.String &&
+                    string.Equals(property.Value.GetString(), EncryptedFormat, StringComparison.OrdinalIgnoreCase);
                 continue;
             }
 
-            if (string.Equals(property.Name, "payload", StringComparison.OrdinalIgnoreCase) &&
-                property.Value.ValueKind == JsonValueKind.String)
+            if (string.Equals(property.Name, "payload", StringComparison.OrdinalIgnoreCase))
             {
-                payload = property.Value.GetString() ?? string.Empty;
+                hasEnvelopeMarker = true;
+                payload = property.Value.ValueKind == JsonValueKind.String ? property.Value.GetString() ?? string.Empty : string.Empty;
             }
         }
 
-        return isEncrypted && payload.Length > 0;
+        if (hasEnvelopeMarker && (!isEncrypted || string.IsNullOrWhiteSpace(payload)))
+            throw new JsonException("Envelope criptografado invalido ou incompleto.");
+        return hasEnvelopeMarker;
     }
 
     public static string NormalizeThumbprint(string thumbprint)
     {
-        ArgumentNullException.ThrowIfNull(thumbprint);
-
-        return new string(thumbprint
-            .Where(c => !char.IsWhiteSpace(c) && CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.Format)
-            .ToArray())
-            .ToUpperInvariant();
+        return CertificateIdentity.NormalizeThumbprint(thumbprint);
     }
 
     private static void AtomicWrite(string path, string content, bool deleteBackup = false)
@@ -307,21 +301,11 @@ public sealed class JsonStateStore
         DurableFileWriter.WriteAtomic(path, content, deleteBackup);
     }
 
-    private void PreserveCorruptFile(string path)
+    // Chamado somente dentro do mutex; dados invalidos permanecem no caminho original.
+    private List<CertificateStateRecord> ReadExistingRecords()
     {
-        try
-        {
-            if (!File.Exists(path))
-            {
-                return;
-            }
-
-            var corruptPath = $"{path}.corrupt-{DateTimeOffset.Now:yyyyMMddHHmmss}-{Guid.NewGuid():N}";
-            File.Move(path, corruptPath);
-        }
-        catch (Exception ex)
-        {
-            _logger.Error(ex, "Failed to preserve corrupt state file");
-        }
+        if (new FileInfo(_paths.StatePath).Length > MaxStoredStateBytes)
+            throw new InvalidDataException("Arquivo de estado excede o limite de tamanho.");
+        return DeserializeRecords((_readHooks?.ReadAllText ?? File.ReadAllText)(_paths.StatePath));
     }
 }

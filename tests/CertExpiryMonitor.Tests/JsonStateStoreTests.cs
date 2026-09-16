@@ -403,10 +403,10 @@ public sealed class JsonStateStoreTests : IDisposable
 
         Assert.False(succeeded);
         Assert.Empty(state);
-        // O arquivo original nao deve mais existir (foi renomeado para .corrupt-*)
-        Assert.False(File.Exists(_paths.StatePath));
+        // A falha deve continuar visivel na leitura seguinte e apos reiniciar.
+        Assert.True(File.Exists(_paths.StatePath));
         var corruptFiles = Directory.GetFiles(_tempDir, "*.corrupt-*");
-        Assert.NotEmpty(corruptFiles);
+        Assert.Empty(corruptFiles);
     }
 
     [Fact]
@@ -438,12 +438,12 @@ public sealed class JsonStateStoreTests : IDisposable
 
         Assert.False(succeeded);
         Assert.Empty(state);
-        Assert.False(File.Exists(_paths.StatePath));
-        Assert.Single(Directory.GetFiles(_tempDir, "certificate-state.json.corrupt-*"));
+        Assert.True(File.Exists(_paths.StatePath));
+        Assert.Empty(Directory.GetFiles(_tempDir, "certificate-state.json.corrupt-*"));
     }
 
     [Fact]
-    public void RepeatedCorruptJsonPreservesEveryCorruptFile()
+    public void RepeatedCorruptJsonKeepsOriginalWithoutCreatingCopies()
     {
         File.WriteAllText(_paths.StatePath, "{ primeiro state quebrado");
         Assert.False(_store.TryLoad(out _));
@@ -452,7 +452,8 @@ public sealed class JsonStateStoreTests : IDisposable
         Assert.False(_store.TryLoad(out _));
 
         var corruptFiles = Directory.GetFiles(_tempDir, "certificate-state.json.corrupt-*");
-        Assert.Equal(2, corruptFiles.Length);
+        Assert.Empty(corruptFiles);
+        Assert.Equal("{ segundo state quebrado", File.ReadAllText(_paths.StatePath));
     }
 
     [Fact]
@@ -469,21 +470,21 @@ public sealed class JsonStateStoreTests : IDisposable
     }
 
     [Fact]
-    public void EmptyJsonObjectReturnsEmptyState()
+    public void EmptyJsonObjectFailsWithoutChangingOriginal()
     {
         File.WriteAllText(_paths.StatePath, "{}");
 
-        var state = _store.Load();
+        Assert.False(_store.TryLoad(out var state));
 
         Assert.Empty(state);
     }
 
     [Fact]
-    public void EnvelopeWithNullRecordsReturnsEmptyState()
+    public void EnvelopeWithNullRecordsFailsWithoutChangingOriginal()
     {
         File.WriteAllText(_paths.StatePath, """{"version":1,"records":null}""");
 
-        var state = _store.Load();
+        Assert.False(_store.TryLoad(out var state));
 
         Assert.Empty(state);
         Assert.True(File.Exists(_paths.StatePath));

@@ -163,13 +163,13 @@ public sealed class ExpiryEvaluator
 
     private static bool TryNormalizeThumbprint(string thumbprint, out string normalized)
     {
-        normalized = JsonStateStore.NormalizeThumbprint(thumbprint);
+        normalized = CertificateIdentity.NormalizeThumbprint(thumbprint);
         return !string.IsNullOrWhiteSpace(normalized);
     }
 
     private static void RefreshRecord(CertificateStateRecord record, CertificateSnapshot certificate)
     {
-        record.Thumbprint = JsonStateStore.NormalizeThumbprint(certificate.Thumbprint);
+        record.Thumbprint = CertificateIdentity.NormalizeThumbprint(certificate.Thumbprint);
         record.NotAfter = certificate.NotAfter;
     }
 

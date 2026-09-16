@@ -147,9 +147,10 @@ public sealed class JsonSettingsStoreTests : IDisposable
         Assert.NotNull(loaded);
         // Defaults retornados
         Assert.NotNull(loaded.Thresholds);
-        // O arquivo corrompido foi preservado (renomeado), settings.json removido.
+        // Manter o original impede que a proxima leitura promova a falha a defaults.
+        Assert.True(File.Exists(_paths.SettingsPath));
         var corruptFiles = Directory.GetFiles(_tempDir, "settings.json.corrupt-*");
-        Assert.NotEmpty(corruptFiles);
+        Assert.Empty(corruptFiles);
     }
 
     [Fact]
@@ -167,7 +168,7 @@ public sealed class JsonSettingsStoreTests : IDisposable
     }
 
     [Fact]
-    public void RepeatedCorruptJsonPreservesEveryCorruptFile()
+    public void RepeatedCorruptJsonKeepsOriginalWithoutCreatingCopies()
     {
         File.WriteAllText(_paths.SettingsPath, "{ primeiro json quebrado");
         Assert.False(_store.TryLoad(out _));
@@ -176,7 +177,8 @@ public sealed class JsonSettingsStoreTests : IDisposable
         Assert.False(_store.TryLoad(out _));
 
         var corruptFiles = Directory.GetFiles(_tempDir, "settings.json.corrupt-*");
-        Assert.Equal(2, corruptFiles.Length);
+        Assert.Empty(corruptFiles);
+        Assert.Equal("{ segundo json quebrado", File.ReadAllText(_paths.SettingsPath));
     }
 
     [Fact]
@@ -280,11 +282,11 @@ public sealed class JsonSettingsStoreTests : IDisposable
     }
 
     [Fact]
-    public void EnvelopeWithNullSettingsReturnsDefaultsWithoutPreservingAsCorrupt()
+    public void EnvelopeWithNullSettingsFailsWithoutChangingOriginal()
     {
         File.WriteAllText(_paths.SettingsPath, """{"version":1,"settings":null}""");
 
-        var loaded = _store.Load();
+        Assert.False(_store.TryLoad(out var loaded));
 
         Assert.Equal(TimeSpan.FromHours(9), loaded.DailyCheckTime);
         Assert.NotNull(loaded.Thresholds);
@@ -293,11 +295,11 @@ public sealed class JsonSettingsStoreTests : IDisposable
     }
 
     [Fact]
-    public void NonObjectRootReturnsDefaultsWithoutPreservingAsCorrupt()
+    public void NonObjectRootFailsWithoutChangingOriginal()
     {
         File.WriteAllText(_paths.SettingsPath, "[]");
 
-        var loaded = _store.Load();
+        Assert.False(_store.TryLoad(out var loaded));
 
         Assert.Equal(TimeSpan.FromHours(9), loaded.DailyCheckTime);
         Assert.NotNull(loaded.Thresholds);

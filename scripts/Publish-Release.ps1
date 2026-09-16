@@ -4,8 +4,8 @@
 
 .DESCRIPTION
     Sincroniza a versao no .csproj e no .iss, compila com dotnet publish
-    (self-contained, win-x64, single-file) e, se o Inno Setup estiver
-    disponivel, gera o instalador.
+    (self-contained, win-x64, single-file) e exige Inno Setup quando
+    a geracao do instalador for solicitada.
 
 .PARAMETER Version
     Versao semantica ex: "1.2.3". Obrigatorio.
@@ -37,6 +37,19 @@ if (-not (Test-Path $dotnet)) {
     $dotnet = "dotnet"
 }
 
+# Valida dependencias antes de alterar versoes ou remover o publish anterior.
+$iscc = $null
+if ($BuildInstaller) {
+    $iscc = @(
+        "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+        "${env:ProgramFiles}\Inno Setup 6\ISCC.exe",
+        "${env:LOCALAPPDATA}\Programs\Inno Setup 6\ISCC.exe"
+    ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    if (-not $iscc) {
+        throw "Inno Setup 6 nao encontrado; -BuildInstaller exige ISCC.exe."
+    }
+}
+
 Write-Host "=== CertExpiryMonitor Release: v$Version ===" -ForegroundColor Cyan
 
 # -------------------------------------------------------------------------
@@ -44,21 +57,21 @@ Write-Host "=== CertExpiryMonitor Release: v$Version ===" -ForegroundColor Cyan
 # -------------------------------------------------------------------------
 Write-Host "[1/4] Atualizando versao em $csproj ..."
 
-$csprojContent = Get-Content $csproj -Raw
+$csprojContent = Get-Content -LiteralPath $csproj -Raw -Encoding UTF8
 $csprojContent = $csprojContent -replace '<Version>[^<]+</Version>',        "<Version>$Version</Version>"
 $csprojContent = $csprojContent -replace '<AssemblyVersion>[^<]+</AssemblyVersion>', "<AssemblyVersion>$Version.0</AssemblyVersion>"
 $csprojContent = $csprojContent -replace '<FileVersion>[^<]+</FileVersion>',  "<FileVersion>$Version.0</FileVersion>"
 $csprojContent = $csprojContent -replace '<InformationalVersion>[^<]+</InformationalVersion>', "<InformationalVersion>$Version</InformationalVersion>"
-Set-Content -Path $csproj -Value $csprojContent -NoNewline
+Set-Content -Path $csproj -Value $csprojContent -NoNewline -Encoding UTF8
 
 # -------------------------------------------------------------------------
 # 2. Atualiza versao no .iss
 # -------------------------------------------------------------------------
 Write-Host "[2/4] Atualizando versao em $issFile ..."
 
-$issContent = Get-Content $issFile -Raw
+$issContent = Get-Content -LiteralPath $issFile -Raw -Encoding UTF8
 $issContent = $issContent -replace '#define MyAppVersion "[^"]+"', "#define MyAppVersion `"$Version`""
-Set-Content -Path $issFile -Value $issContent -NoNewline
+Set-Content -Path $issFile -Value $issContent -NoNewline -Encoding UTF8
 
 Write-Host "      Versao sincronizada: $Version"
 
@@ -67,8 +80,17 @@ Write-Host "      Versao sincronizada: $Version"
 # -------------------------------------------------------------------------
 Write-Host "[3/4] Publicando ..."
 
-if (Test-Path $publishDir) {
-    Remove-Item $publishDir -Recurse -Force
+if (Test-Path -LiteralPath $publishDir) {
+    $publishItem = Get-Item -LiteralPath $publishDir -Force
+    $resolvedPublish = (Resolve-Path -LiteralPath $publishDir).Path
+    $expectedPublish = [IO.Path]::GetFullPath((Join-Path $root "publish"))
+    if (-not $publishItem.PSIsContainer -or
+        ($publishItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        -not $resolvedPublish.Equals($expectedPublish, [StringComparison]::OrdinalIgnoreCase) -or
+        -not ([IO.Path]::GetDirectoryName($resolvedPublish)).Equals($root, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Limpeza recusada: publish deve ser um diretorio real diretamente dentro do repositorio."
+    }
+    Remove-Item -LiteralPath $resolvedPublish -Recurse -Force
 }
 
 & $dotnet restore $csproj --locked-mode
@@ -100,23 +122,15 @@ Write-Host "      Publicado em: $publishDir"
 if ($BuildInstaller) {
     Write-Host "[4/4] Compilando instalador ..."
 
-    # Inno Setup 6 pode estar em 3 locais comuns: ProgramFiles (x86), ProgramFiles
-    # ou %LOCALAPPDATA%\Programs (instalacao per-user, padrao do winget recente).
-    $iscc = @(
-        "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
-        "${env:ProgramFiles}\Inno Setup 6\ISCC.exe",
-        "${env:LOCALAPPDATA}\Programs\Inno Setup 6\ISCC.exe"
-    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-
-    if (-not $iscc) {
-        Write-Warning "Inno Setup nao encontrado. Pule -BuildInstaller ou instale o Inno Setup 6."
-    } else {
-        & $iscc $issFile
-        if ($LASTEXITCODE -ne 0) {
-            throw "ISCC falhou com codigo $LASTEXITCODE"
-        }
-        Write-Host "      Instalador gerado."
+    & $iscc $issFile
+    if ($LASTEXITCODE -ne 0) {
+        throw "ISCC falhou com codigo $LASTEXITCODE"
     }
+    $installerPath = Join-Path $root "installer-output\CertExpiryMonitorSetup.exe"
+    if (-not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
+        throw "ISCC terminou sem gerar o instalador esperado: $installerPath"
+    }
+    Write-Host "      Instalador gerado."
 } else {
     Write-Host "[4/4] Ignorado (use -BuildInstaller para gerar o .exe do instalador)."
 }

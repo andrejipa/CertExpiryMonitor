@@ -172,7 +172,7 @@ public sealed class StressTests : IDisposable
     {
         // Cenario: processo malicioso do mesmo usuario grava 2 MB em settings.json.
         // Sem size guard, cada inicializacao alocaria 2 MB de string para nada.
-        // Com guard: arquivo e preservado como .corrupt-* e defaults sao retornados.
+        // Com guard: arquivo permanece intacto e a leitura retorna falha.
         var giant = "{\"LastCertificateSnapshotHash\":\"" + new string('A', 2_000_000) + "\"}";
         File.WriteAllText(_paths.SettingsPath, giant);
 
@@ -186,7 +186,8 @@ public sealed class StressTests : IDisposable
 
         // Arquivo gigante preservado para diagnostico
         var corruptFiles = Directory.GetFiles(_tempDir, "settings.json.corrupt-*");
-        Assert.NotEmpty(corruptFiles);
+        Assert.Empty(corruptFiles);
+        Assert.Equal(giant, File.ReadAllText(_paths.SettingsPath));
     }
 
     // ---- Round 2 #2e: Certificate snapshots duplicados ----

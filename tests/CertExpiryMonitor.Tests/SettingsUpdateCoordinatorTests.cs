@@ -95,8 +95,10 @@ public sealed class SettingsUpdateCoordinatorTests : IDisposable
 
         Assert.False(result.Saved);
         Assert.Null(result.Plan);
-        Assert.False(File.Exists(_paths.SettingsPath));
-        Assert.Single(Directory.GetFiles(_tempDir, "settings.json.corrupt-*"));
+        Assert.Equal("{ settings quebrado", File.ReadAllText(_paths.SettingsPath));
+        Assert.Empty(Directory.GetFiles(_tempDir, "settings.json.corrupt-*"));
+        Assert.False(_coordinator.Apply(DefaultUpdate(), DateTime.Now).Saved);
+        Assert.Equal("{ settings quebrado", File.ReadAllText(_paths.SettingsPath));
     }
 
     [Fact]

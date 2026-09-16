@@ -22,6 +22,13 @@ public sealed record CheckCycleResult(
     AppSettings? Settings = null,
     NotificationPlan? Plan = null)
 {
+    internal string? ManualFeedback => Status switch
+    {
+        CheckCycleStatus.CompletedNoDue => "Nenhum novo aviso pendente. Consulte os certificados monitorados.",
+        CheckCycleStatus.ReadFailed => "A verificação não foi concluída porque as configurações, o histórico ou os certificados não puderam ser lidos. Nenhum dado foi alterado.",
+        _ => null
+    };
+
     public bool Ran => Status is CheckCycleStatus.CompletedNoDue or
         CheckCycleStatus.NotificationShown or
         CheckCycleStatus.NotificationFailed or

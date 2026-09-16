@@ -79,6 +79,7 @@ internal static class Program
 
         // Composicao dos servicos
         var certificateReader = new CertificateReader(logger);
+        var detailsLoader = new DetailsDataLoader(settingsStore, stateStore, certificateReader);
         var expiryEvaluator = new ExpiryEvaluator();
         var checkService = new CertificateCheckService(settingsStore, stateStore, certificateReader, expiryEvaluator, logger, diagnosticEvents);
         var checkCoordinator = new NotificationCheckCoordinator(settingsStore, checkService, logger, diagnosticEvents);
@@ -110,6 +111,7 @@ internal static class Program
             settingsStore,
             stateStore,
             certificateReader,
+            detailsLoader,
             expiryEvaluator,
             checkCoordinator,
             notifier,

@@ -1,13 +1,13 @@
 # CertExpiryMonitor
 
 [![Build and Test](https://github.com/andrejipa/CertExpiryMonitor/actions/workflows/build.yml/badge.svg)](https://github.com/andrejipa/CertExpiryMonitor/actions)
-![Tests](https://img.shields.io/badge/tests-442%20passing-brightgreen)
+
 ![.NET](https://img.shields.io/badge/.NET-8.0-512BD4)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6)
 
 Aplicativo Windows leve para monitorar certificados digitais A1 no perfil do usuário logado.
 
-> **Status:** 442 testes passando (build limpo, 0 warnings); cobertura `65,79%` de linhas / `63,37%` de branches; Stryker `70,40%`; o single-file deve permanecer abaixo de 77 MiB.
+> **Validação:** resultados atuais de build e testes estão no GitHub Actions. Os números históricos abaixo se referem à versão indicada; o single-file deve permanecer abaixo de 77 MiB.
 
 **Repositório:** https://github.com/andrejipa/CertExpiryMonitor
 
@@ -25,7 +25,7 @@ Aplicativo Windows leve para monitorar certificados digitais A1 no perfil do usu
 - `CertificateReader`: lê apenas `CurrentUser\My` com `X509Store(StoreName.My, StoreLocation.CurrentUser)` em modo somente leitura.
 - `ExpiryEvaluator`: aplica as faixas configuradas, deduplica por thumbprint e respeita estados persistidos.
 - `ExpiryThresholds`: modelo de faixas configuráveis (padrão: 30/15/7/1 dias); `Normalized()` garante ordering.
-- `JsonStateStore`: persiste estado por thumbprint em `certificate-state.json` com envelope versionado (v1) e suporte a formato legado.
+- `JsonStateStore`: persiste estado por thumbprint em `certificate-state.json` com envelope DPAPI v2, protegido para o usuário atual, e leitura dos formatos legados (array e envelope v1).
 - `JsonSettingsStore`: persiste configurações do usuário em `settings.json`.
 - `DiagnosticEventStore`: registra diagnóstico técnico mínimo em `diagnostics.db` SQLite local, sempre redigido.
 - `ToastNotifierService`: cria atalho COM com AppUserModelID e emite Toast Notifications compactas; janela propria e usada apenas como fallback se o Windows rejeitar o toast.
@@ -77,8 +77,18 @@ Aplicativo Windows leve para monitorar certificados digitais A1 no perfil do usu
 - Certificado renovado normalmente recebe novo thumbprint e será tratado como novo certificado.
 - Qualquer certificado expirado (`daysRemaining < 0`) é ignorado pelas faixas de notificação.
 - Certificados duplicados no store são consolidados por thumbprint.
-- JSON corrompido ou temporariamente ilegível é preservado e aborta o ciclo sem promover defaults salváveis; a escrita atômica reduz a chance de corrupção.
+- JSON corrompido ou temporariamente ilegível é preservado e aborta o ciclo sem promover defaults salváveis, inclusive nas leituras seguintes. A recuperação de dados deve anteceder novas gravações; a escrita atômica reduz a chance de corrupção.
 - Se o usuário executar verificação manual, ela conta como verificação do dia.
+
+## Recuperação de configurações e histórico
+
+Se a leitura falhar, o aplicativo mantém o arquivo original e bloqueia gravações dependentes dele. Não restaura backups nem reinicializa preferências automaticamente.
+
+1. Encerre o aplicativo pelo menu da bandeja e preserve uma cópia do arquivo inválido em outro local.
+2. Valide o backup antes de usá-lo: as configurações devem ser um JSON reconhecido e o histórico deve poder ser lido pelo aplicativo no mesmo perfil do Windows. O histórico protegido por DPAPI não é portável para outro usuário.
+3. Substitua somente o arquivo afetado por sua cópia válida, mantendo a cópia do original para investigação. Abra novamente o aplicativo e confirme horário, faixas e certificados ignorados.
+
+Excluir o arquivo para começar de novo exige uma decisão explícita do usuário: isso perde preferências ou dispensas e pode tornar avisos anteriores elegíveis novamente. Sem backup válido, preserve os dados e investigue a falha antes de reinicializá-los.
 
 ## Como compilar
 
@@ -100,6 +110,8 @@ dotnet build CertExpiryMonitor.csproj
 # Com geração do instalador Inno Setup:
 .\scripts\Publish-Release.ps1 -Version "1.0.0" -BuildInstaller
 ```
+
+Com `-BuildInstaller`, a ausência do Inno Setup 6 interrompe o processo antes de alterar versões ou limpar o publish anterior. A limpeza recusa links e caminhos fora da pasta publish do repositório.
 
 O projeto principal exclui a pasta `tests\` da compilação. O binário gerado é standalone para Windows x64 e não exige SDK ou runtime .NET instalado.
 
@@ -129,7 +141,7 @@ Invoke-WebRequest -UseBasicParsing 'https://dot.net/v1/dotnet-install.ps1' -OutF
 
 A pasta `.dotnet-local\` está no `.gitignore`. O CI no GitHub Actions já tem o SDK pré-instalado via `actions/setup-dotnet`.
 
-**Cobertura dos testes (442 casos, todos verdes):**
+**Áreas cobertas pela suíte:**
 
 | Suite | O que cobre |
 |---|---|
@@ -171,7 +183,7 @@ A pasta `.dotnet-local\` está no `.gitignore`. O CI no GitHub Actions já tem o
 | Global oficial | `70,40%` |
 | Baseline preservado, contagem HTML normalizada | `67,90%` |
 
-O score global supera o piso de `70%`. Janelas WinForms/WinRT ficam fora do filtro e sao validadas por integracao STA/BugHunt. Exclusoes locais do Stryker documentam apenas observabilidade e contratos fisicos nao observaveis em memoria; os caminhos funcionais continuam no escopo.
+Nesse relatório histórico, o score global superou a referência de `70%`. A configuração atual usa `high=70`, `low=50` e `break=50`. Janelas WinForms/WinRT ficam fora do filtro e sao validadas por integracao STA/BugHunt. Exclusoes locais do Stryker documentam apenas observabilidade e contratos fisicos nao observaveis em memoria; os caminhos funcionais continuam no escopo.
 
 **Tamanho do publish single-file v1.0.10 com SQLite:** `75,52 MiB`, abaixo do limite de `77 MiB`; instalador Inno Setup `70,32 MiB`. Os bytes e o SHA-256 definitivos acompanham a release porque o binario incorpora o `SourceRevisionId`. Mantidos `PublishTrimmed=false`, `EnableCompressionInSingleFile=true` e `IncludeNativeLibrariesForSelfExtract=true`.
 
@@ -259,6 +271,8 @@ Instalacao silenciosa:
 ```
 
 O instalador usa `PrivilegesRequired=lowest`, instala os binários em `%LOCALAPPDATA%\Programs\CertExpiryMonitor`, cria atalho opcional no Menu Iniciar e inicia o app após a instalação. O registro de startup (Task Scheduler ou `HKCU\Run`) é gerenciado pelo próprio app.
+
+Uma atualização respeita a preferência de inicialização automática já salva. O instalador não registra startup por conta própria; o app aplica a preferência somente quando consegue ler as configurações. Na instalação interativa, se a opção de iniciar agora for desmarcada, essa aplicação fica para a próxima abertura. Na instalação silenciosa, o app inicia em background.
 
 Os dados por usuário ficam em `%LOCALAPPDATA%\CertExpiryMonitor`. O uninstall remove os binários, a tarefa agendada e a entrada `HKCU\Run` (fallback), mas preserva logs, settings e estado.
 
